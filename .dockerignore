@@ -1,0 +1,49 @@
+# Dependencies
+node_modules/
+backend/node_modules/
+frontend/node_modules/
+
+# Environment (variáveis configuradas no Koyeb)
+.env
+backend/.env
+
+# Git
+.git/
+.gitignore
+
+# Claude
+.claude/
+
+# Dados de runtime
+backend/data/
+
+# Deploy artifacts
+deploy.tar.gz
+deploy/
+
+# Arquivos locais / temporários
+*.key
+*.pub
+*.pdf
+*.log
+*.tmp
+*.temp
+nul
+lista.jpg
+erro*.txt
+script.txt
+terminal*.txt
+test-puppeteer-pdf.cjs
+check_*.sql
+create_*.sql
+fix_*.sql
+taxasMP.txt
+"taxa cartão de crédito.txt"
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/

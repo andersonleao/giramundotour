@@ -1,0 +1,90 @@
+# Dependencies
+node_modules/
+backend/node_modules/
+frontend/node_modules/
+
+# Database
+backend/prisma/*.db
+backend/prisma/*.db-journal
+
+# Environment
+.env
+backend/.env
+
+# Logs
+*.log
+npm-debug.log*
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Build
+dist/
+build/
+
+# Dados de runtime (não deployar — sobrescreve dados do servidor)
+backend/data/
+
+# Temp
+*.tmp
+*.temp
+
+# Test artifacts
+test-error-screenshot.png
+
+# Claude memory
+.claude/
+
+# Deploy artifacts
+deploy.tar.gz
+deploy/
+
+# Chaves SSH
+*.key
+*.pub
+
+# PDFs e imagens locais
+*.pdf
+lista.jpg
+
+# Arquivos de log/debug locais
+erro*.txt
+script.txt
+terminal*.txt
+nul
+
+# SQL de manutenção (executados no servidor, não fazem parte do código)
+check_*.sql
+create_hoteis.sql
+fix_cotacoes.sql
+
+# Notas locais
+taxasMP.txt
+taxa\ cartão\ de\ crédito.txt
+
+# Testes avulsos
+test-puppeteer-pdf.cjs
+
+# Dump do banco (gerado localmente para migração)
+*.sql
+giramundotour_dump.sql
+
+# Cache WhatsApp
+backend/.wwebjs_cache/
+backend/.wwebjs_auth/
+
+# Debug snapshots (gerados localmente)
+backend/debug/
+
+# OCR training data (binários grandes)
+backend/*.traineddata
+
+# Arquivo acidental
+backend/IGU

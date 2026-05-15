@@ -1,0 +1,15 @@
+{
+  "name": "giramundotour",
+  "private": true,
+  "scripts": {
+    "dev": "cd backend && npm run dev",
+    "start": "cd backend && npm start",
+    "test": "cd backend && npm test",
+    "test:e2e": "node tests/test-cotacao.mjs",
+    "db:seed": "cd backend && npm run db:seed",
+    "db:studio": "cd backend && npm run db:studio"
+  },
+  "devDependencies": {
+    "playwright": "^1.58.2"
+  }
+}

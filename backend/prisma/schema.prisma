@@ -1,0 +1,195 @@
+// GiraMundoTour - Schema do Banco de Dados
+// Usando Prisma ORM com PostgreSQL
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// =============================================
+// MODELO: Usuários do Sistema
+// =============================================
+model Usuario {
+  id        String   @id @default(uuid())
+  nome      String
+  email     String   @unique
+  senha     String
+  perfil    String   @default("operador") // admin, gerente, operador
+  ativo     Boolean  @default(true)
+  avatar    String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("usuarios")
+}
+
+// =============================================
+// MODELO: Clientes
+// =============================================
+model Cliente {
+  id        String   @id @default(uuid())
+  nome      String
+  email     String?
+  telefone  String?
+  cpf       String?  @unique
+  rg        String?
+  endereco  String?
+  cidade    String?
+  estado    String?
+  cep       String?
+  dataNasc  DateTime?
+  observacoes String?
+  ativo     Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Relacionamentos
+  bilhetes  Bilhete[]
+  cotacoes  Cotacao[]
+
+  @@map("clientes")
+}
+
+// =============================================
+// MODELO: Fornecedores
+// =============================================
+model Fornecedor {
+  id        String   @id @default(uuid())
+  nome      String
+  telegram  String?
+  balcao    String?
+  telefone  String?
+  email     String?
+  contato   String?
+  observacoes String?
+  ativo     Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Relacionamentos
+  bilhetes  Bilhete[]
+
+  @@map("fornecedores")
+}
+
+// =============================================
+// MODELO: Bilhetes Emitidos
+// =============================================
+model Bilhete {
+  id             String   @id @default(uuid())
+  codigoReserva  String
+  companhia      String
+  origem         String?
+  destino        String?
+  dataIda        String?
+  dataVolta      String?
+  valorVenda     Float    @default(0)
+  valorCompra    Float    @default(0)
+  dataEmissao    DateTime @default(now())
+  status         String   @default("emitido") // emitido, cancelado, reembolsado
+  observacoes    String?
+  passageiroNome String?
+  passageiros    String?  // JSON
+  numeroVoo      String?
+  vooVolta       String?
+  cabine         String?
+  bagagem        String?
+  tarifa         Float    @default(0)
+  taxaEmbarque   Float    @default(0)
+  horaPartida    String?
+  horaChegada    String?
+  trechos        String?  // JSON
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  // Relacionamentos (opcionais)
+  clienteId    String?
+  cliente      Cliente?    @relation(fields: [clienteId], references: [id])
+  fornecedorId String?
+  fornecedor   Fornecedor? @relation(fields: [fornecedorId], references: [id])
+
+  @@map("bilhetes")
+}
+
+// =============================================
+// MODELO: Cotações
+// =============================================
+model Cotacao {
+  id          String   @id @default(uuid())
+  voos        String   // JSON com dados dos voos
+  passageiros String   // JSON: { adultos, criancas, bebes }
+  subtotal    Float    @default(0)
+  taxas       Float    @default(0)
+  total       Float    @default(0)
+  validade    DateTime
+  status      String   @default("pendente") // pendente, aprovada, expirada, cancelada
+  observacoes String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  // Relacionamentos
+  clienteId   String
+  cliente     Cliente  @relation(fields: [clienteId], references: [id])
+
+  @@map("cotacoes")
+}
+
+// =============================================
+// MODELO: Companhias Aéreas
+// =============================================
+model CompanhiaAerea {
+  id        String   @id @default(uuid())
+  codigo    String   @unique // Código IATA (ex: LA, G3, AD)
+  nome      String
+  logo      String?
+  cor       String?  // Cor da marca em hex
+  ativo     Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("companhias_aereas")
+}
+
+// =============================================
+// MODELO: Reservas (Captura de Reservas Aéreas)
+// =============================================
+model Reserva {
+  id           String   @id @default(uuid())
+  companhia    String   // azul, gol, latam
+  localizador  String
+  dataIda      String?
+  dataVolta    String?
+  origem       String?
+  destino      String?
+  clienteId    String?
+  fornecedorId String?
+  valorVenda   Float    @default(0)
+  custos       Float    @default(0)
+  saldo        Float    @default(0)
+  dataEmissao  String?
+  urlReserva   String?
+  bilhete      String?  // JSON com dados completos do bilhete
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  @@map("reservas")
+}
+
+// =============================================
+// MODELO: Configurações do Sistema
+// =============================================
+model Configuracao {
+  id        String   @id @default(uuid())
+  chave     String   @unique
+  valor     String
+  tipo      String   @default("string") // string, number, boolean, json
+  descricao String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("configuracoes")
+}
