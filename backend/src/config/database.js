@@ -13,6 +13,12 @@ pool.on('error', (err) => {
     console.error('Erro inesperado no pool PostgreSQL:', err);
 });
 
+// Neon (PostgreSQL 15+) não inclui public no search_path padrão.
+// Aplica SET em cada nova conexão para garantir compatibilidade.
+pool.on('connect', (client) => {
+    client.query('SET search_path = public').catch(() => {});
+});
+
 async function connectDatabase() {
     try {
         const client = await pool.connect();
