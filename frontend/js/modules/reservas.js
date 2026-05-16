@@ -105,42 +105,30 @@ const ReservasModule = {
                             </div>
                         </div>
 
-                        <!-- Azul: entrada manual (API Azul bloqueada por Akamai em servidores) -->
+                        <!-- Azul: localizador + origem → salva direto; destino/datas editáveis na grid -->
                         <div id="camposAzul" style="display:none;">
-                            <div class="row g-3">
-                                <div class="col-md-2">
+                            <div class="row g-3 align-items-end">
+                                <div class="col-md-4">
                                     <label class="form-label">Localizador <span class="text-danger">*</span></label>
                                     <input type="text" class="form-control text-uppercase" id="azulLocalizador"
                                            placeholder="Ex: VR6C3H" maxlength="10">
                                 </div>
-                                <div class="col-md-2">
+                                <div class="col-md-4">
                                     <label class="form-label">Origem <span class="text-danger">*</span></label>
                                     <select class="form-select" id="azulOrigem">
                                         <option value="">Selecione...</option>
                                         ${optsAeroportos}
                                     </select>
                                 </div>
-                                <div class="col-md-2">
-                                    <label class="form-label">Destino <span class="text-danger">*</span></label>
-                                    <select class="form-select" id="azulDestino">
-                                        <option value="">Selecione...</option>
-                                        ${optsAeroportos}
-                                    </select>
-                                </div>
-                                <div class="col-md-2">
-                                    <label class="form-label">Data Ida <span class="text-danger">*</span></label>
-                                    <input type="date" class="form-control" id="azulDataIda">
-                                </div>
-                                <div class="col-md-2">
-                                    <label class="form-label">Data Volta</label>
-                                    <input type="date" class="form-control" id="azulDataVolta">
-                                </div>
-                                <div class="col-md-2 d-flex align-items-end">
+                                <div class="col-md-4 d-flex align-items-end">
                                     <button class="btn btn-success w-100" onclick="ReservasModule.adicionarReserva()">
                                         <i class="bi bi-plus-circle"></i> Adicionar
                                     </button>
                                 </div>
                             </div>
+                            <small class="text-muted mt-1 d-block">
+                                <i class="bi bi-info-circle"></i> Destino e datas serão preenchidos diretamente na grid após adicionar.
+                            </small>
                         </div>
 
                         <!-- VoeGOL: dados manuais (sem Puppeteer) -->
@@ -451,32 +439,24 @@ const ReservasModule = {
         if (cia === 'azul') {
             const localizador = document.getElementById('azulLocalizador').value.trim().toUpperCase();
             const origem      = document.getElementById('azulOrigem').value;
-            const destino     = document.getElementById('azulDestino').value;
-            const dataIda     = document.getElementById('azulDataIda').value;
-            const dataVolta   = document.getElementById('azulDataVolta').value;
-
-            if (!localizador || !origem || !destino || !dataIda) {
-                App.showToast('Preencha Localizador, Origem, Destino e Data de Ida', 'error');
+            if (!localizador || !origem) {
+                App.showToast('Preencha Localizador e Origem', 'error');
                 return;
             }
-
             const urlReserva = `https://www.voeazul.com.br/br/pt/home/minhas-viagens/confirmacao?pnr=${localizador}&origin=${origem}`;
-            const trechos = [{ tipo: 'ida', data: dataIda, origem, destino, companhia: 'AD', voo: '', horaPartida: '', horaChegada: '' }];
-            if (dataVolta) trechos.push({ tipo: 'volta', data: dataVolta, origem: destino, destino: origem, companhia: 'AD', voo: '', horaPartida: '', horaChegada: '' });
             const bilhete = {
                 companhia: 'AD', codigoReserva: localizador, passageiroNome: '',
-                origem, destino, dataIda, dataVolta: dataVolta || '',
+                origem, destino: '', dataIda: '', dataVolta: '',
                 horaPartida: '', horaChegada: '', _horaPartidaVolta: '', _horaChegadaVolta: '',
                 numeroVoo: '', _numeroVooVolta: '', cabine: '', bagagem: '',
-                dataEmissao: new Date().toISOString(), trechos
+                dataEmissao: new Date().toISOString(), trechos: []
             };
             const locChave   = localizador.toUpperCase();
             const todas      = Storage.getReservas();
             const jaExiste   = todas.find(r => r.localizador?.toUpperCase() === locChave && r.companhia === 'azul');
             const jaExisteDb = this._dbReservas.find(r => r.localizador?.toUpperCase() === locChave && r.companhia === 'azul');
             const dadosReserva = {
-                companhia: 'azul', localizador, dataIda, dataVolta: dataVolta || '',
-                origem, destino, urlReserva, _bilhete: bilhete,
+                companhia: 'azul', localizador, origem, urlReserva, _bilhete: bilhete,
                 emitidoPor: document.getElementById('reservaEmitidoPor')?.value || ''
             };
             const idDbAzul = jaExisteDb?.id || (jaExiste?._savedInDb ? jaExiste.id : null);
@@ -489,18 +469,19 @@ const ReservasModule = {
                 if (idDbAzul) {
                     fetch(`/api/reservas/${idDbAzul}`, {
                         method: 'PUT', headers: this._authHeaders(),
-                        body: JSON.stringify({ dataIda, dataVolta: dataVolta || null, origem, destino, urlReserva, bilhete: JSON.stringify(bilhete) })
+                        body: JSON.stringify({ origem, urlReserva, bilhete: JSON.stringify(bilhete) })
                     }).catch(e => console.warn('[Azul] Erro ao atualizar:', e.message));
                 }
-                App.showToast('Reserva Azul atualizada!', 'success');
+                App.showToast('Reserva Azul atualizada! Preencha destino e datas na grid.', 'info');
             } else {
                 const nova = Storage.addReserva({
                     ...dadosReserva,
+                    destino: '', dataIda: '', dataVolta: '',
                     clienteId: '', fornecedorId: '', valorVenda: 0, custos: 0, saldo: 0,
                     dataEmissao: new Date().toISOString(), _savedInDb: false
                 });
                 this._registrarAlerta(nova);
-                App.showToast('Reserva Azul adicionada!', 'success');
+                App.showToast('Reserva Azul adicionada! Preencha destino e datas na grid.', 'success');
             }
             this.carregarGrid();
             return;
@@ -1168,6 +1149,27 @@ const ReservasModule = {
         }
     },
 
+    _salvarDestinoGrid(id, valor, el) {
+        if (!valor) return;
+        this.salvarCampoReserva(id, 'destino', valor);
+        // Atualiza bilhete em memória para gerar PDF correto
+        const dbR = this._dbReservas.find(r => r.id === id);
+        if (dbR) { if (dbR._bilhete) dbR._bilhete.destino = valor; }
+        else { const r = Storage.getReservaById(id); if (r?._bilhete) { r._bilhete.destino = valor; Storage.updateReserva(id, { _bilhete: r._bilhete, destino: valor }); } }
+        this.carregarGrid();
+    },
+
+    _salvarDataGrid(id, campo, valor, el) {
+        if (!valor) return;
+        this.salvarCampoReserva(id, campo, valor);
+        // Atualiza bilhete em memória
+        const key = campo === 'dataIda' ? 'dataIda' : 'dataVolta';
+        const dbR = this._dbReservas.find(r => r.id === id);
+        if (dbR) { if (dbR._bilhete) dbR._bilhete[key] = valor; }
+        else { const r = Storage.getReservaById(id); if (r?._bilhete) { r._bilhete[key] = valor; Storage.updateReserva(id, { _bilhete: r._bilhete, [campo]: valor }); } }
+        this.carregarGrid();
+    },
+
     _editarCliente(reservaId) {
         const link = document.querySelector(`a[onclick*="_editarCliente('${reservaId}')"]`);
         if (!link) return;
@@ -1587,9 +1589,27 @@ const ReservasModule = {
                         <span style="font-size:0.75rem;">${ciaLabel}</span>
                     </td>
                     <td title="${origemTitle}" style="font-weight:600; text-align:center;">${r.origem || '-'}</td>
-                    <td title="${destinoTitle}" style="font-weight:600; text-align:center;">${r.destino || '-'}</td>
-                    <td style="white-space:nowrap; ${idaPassou ? 'color:#0d6efd; font-weight:500; text-decoration:line-through;' : ''}">${dataIdaFmt}</td>
-                    <td style="white-space:nowrap; ${voltaPassou ? 'color:#0d6efd; font-weight:500; text-decoration:line-through;' : ''}">${dataVoltaFmt}</td>
+                    <td style="min-width:80px;">
+                        ${r.destino
+                            ? `<span style="font-weight:600;" title="${destinoTitle}">${r.destino}</span>`
+                            : `<select class="form-select form-select-sm p-0" style="font-size:0.78rem;"
+                                       onchange="ReservasModule._salvarDestinoGrid('${r.id}', this.value, this)">
+                                   <option value="">Destino...</option>
+                                   ${this._gerarOpcoesAeroportosBR()}
+                               </select>`}
+                    </td>
+                    <td style="min-width:110px; ${idaPassou ? 'color:#0d6efd; font-weight:500; text-decoration:line-through;' : ''}">
+                        ${r.dataIda
+                            ? dataIdaFmt
+                            : `<input type="date" class="form-control form-control-sm p-0" style="font-size:0.78rem; min-width:110px;"
+                                      onchange="ReservasModule._salvarDataGrid('${r.id}', 'dataIda', this.value, this)">`}
+                    </td>
+                    <td style="min-width:110px; ${voltaPassou ? 'color:#0d6efd; font-weight:500; text-decoration:line-through;' : ''}">
+                        ${r.dataVolta
+                            ? dataVoltaFmt
+                            : `<input type="date" class="form-control form-control-sm p-0" style="font-size:0.78rem; min-width:110px;"
+                                      onchange="ReservasModule._salvarDataGrid('${r.id}', 'dataVolta', this.value, this)">`}
+                    </td>
                     <td style="white-space:normal; word-break:break-word; line-height:1.25;">
                         ${r.fornecedorNome
                             ? `<span>${r.fornecedorNome}</span>
