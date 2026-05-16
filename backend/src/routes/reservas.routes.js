@@ -868,11 +868,52 @@ router.post('/capturar', async (req, res) => {
                     }
                 }
             }
+        } else if (isAzul) {
+            // Azul usa Akamai Bot Manager — tenta puppeteer-real-browser (corrige TLS fingerprint)
+            let azulPage = null;
+            try {
+                const { connect: realConnectAzul } = require('puppeteer-real-browser');
+                const chromeExeAzul = [
+                    process.env.CHROME_PATH,
+                    process.env.PUPPETEER_EXECUTABLE_PATH,
+                    '/usr/bin/chromium-browser',
+                    '/usr/bin/google-chrome-stable',
+                    '/usr/bin/google-chrome',
+                    'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe',
+                ].filter(Boolean).find(p => { try { return fs.existsSync(p); } catch { return false; } });
+
+                console.log('[Azul] puppeteer-real-browser: iniciando bypass Akamai...');
+                const realResultAzul = await realConnectAzul({
+                    headless: false,
+                    args: [
+                        '--no-sandbox', '--disable-setuid-sandbox',
+                        '--disable-dev-shm-usage',
+                        '--window-size=1280,800',
+                        '--window-position=9999,9999',
+                    ],
+                    customConfig: chromeExeAzul ? { chromePath: chromeExeAzul } : {},
+                    turnstile: false,
+                    connectOption: { defaultViewport: { width: 1366, height: 768 } },
+                    disableXvfb: true,
+                });
+                browser  = realResultAzul.browser;
+                azulPage = realResultAzul.page;
+                console.log('[Azul] puppeteer-real-browser: OK');
+            } catch (eAzulReal) {
+                console.warn('[Azul] puppeteer-real-browser falhou:', eAzulReal.message, '— usando fallback stealth');
+                browser  = await puppeteerExtra.launch(launchOptions);
+                azulPage = null;
+            }
+            // Cria nova página se real-browser não retornou uma
+            const _azulNewPage = azulPage || await browser.newPage();
+            if (!azulPage) {
+                await _azulNewPage.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36');
+            }
+            await _azulNewPage.setViewport({ width: 1366, height: 768 });
+            // Continua usando _azulNewPage como page — reatribui via const abaixo
+            golPage = _azulNewPage; // reutiliza a variável golPage para simplificar o fluxo
         } else {
-            // Azul usa proteções anti-bot — puppeteer-extra com stealth
-            browser = isAzul
-                ? await puppeteerExtra.launch(launchOptions)
-                : await puppeteer.launch(launchOptions);
+            browser = await puppeteer.launch(launchOptions);
         }
 
         // puppeteer-real-browser já retorna a página pronta; nos demais casos cria nova
@@ -948,19 +989,56 @@ router.post('/capturar', async (req, res) => {
             const oriAzul = urlObj.searchParams.get('origin') || '';
             console.log(`[Azul] pnr="${pnrAzul}" origin="${oriAzul}"`);
 
-            // Aguarda qualquer JSON da Azul (URL do b2c-api ou voeazul)
+            // 1) Tenta fetch direto no Node.js com headers de browser real (mais rápido que Puppeteer)
+            const azulNodeHeaders = {
+                'Accept': 'application/json, text/plain, */*',
+                'Accept-Language': 'pt-BR,pt;q=0.9,en-US;q=0.8,en;q=0.7',
+                'Accept-Encoding': 'gzip, deflate, br',
+                'Origin': 'https://www.voeazul.com.br',
+                'Referer': url,
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+                'sec-ch-ua': '"Chromium";v="124", "Google Chrome";v="124", "Not-A.Brand";v="99"',
+                'sec-ch-ua-mobile': '?0',
+                'sec-ch-ua-platform': '"Windows"',
+                'sec-fetch-dest': 'empty',
+                'sec-fetch-mode': 'cors',
+                'sec-fetch-site': 'same-site',
+            };
+            for (const ep of [
+                `https://b2c-api.voeazul.com.br/booking/v5/bookings/${pnrAzul}?origin=${oriAzul}`,
+                `https://b2c-api.voeazul.com.br/booking/v4/bookings/${pnrAzul}?origin=${oriAzul}`,
+            ]) {
+                try {
+                    const nr = await fetch(ep, { headers: azulNodeHeaders });
+                    console.log(`[Azul] Fetch direto Node: HTTP ${nr.status} para ${ep}`);
+                    if (nr.ok) {
+                        const json = await nr.json();
+                        if (json && Object.keys(json).length > 2) {
+                            apiData.push({ url: ep, data: json });
+                            console.log('[Azul] Fetch direto Node: dados obtidos!');
+                            break;
+                        }
+                    }
+                } catch (eNode) {
+                    console.warn('[Azul] Fetch direto Node error:', eNode.message);
+                }
+            }
+
+            // 2) Aguarda qualquer JSON da Azul via listener da página Puppeteer
             const bookingApiFilter = resp => {
                 const u  = resp.url();
                 const ct = resp.headers()['content-type'] || '';
                 return (u.includes('b2c-api.voeazul.com.br') || u.includes('api.voeazul.com.br')) &&
                        (ct.includes('application/json') || ct.includes('text/json'));
             };
-            try {
-                await page.waitForResponse(bookingApiFilter, { timeout: 30000 });
-                console.log('[Azul] API respondeu — aguardando +4s');
-                await new Promise(r => setTimeout(r, 4000));
-            } catch (_) {
-                console.warn('[Azul] API não respondeu via listener — tentando chamada direta do browser...');
+            if (apiData.length === 0) {
+                try {
+                    await page.waitForResponse(bookingApiFilter, { timeout: 30000 });
+                    console.log('[Azul] API respondeu via listener — aguardando +4s');
+                    await new Promise(r => setTimeout(r, 4000));
+                } catch (_) {
+                    console.warn('[Azul] API não respondeu via listener — tentando chamada direta do browser...');
+                }
             }
 
             // Tenta chamar a API de booking diretamente do contexto do browser (tem cookies de sessão)

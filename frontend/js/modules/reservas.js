@@ -105,46 +105,24 @@ const ReservasModule = {
                             </div>
                         </div>
 
-                        <!-- Azul: dados manuais (API protegida por Akamai WAF — requer sessão) -->
+                        <!-- Azul: localizador + origem → importação automática via Puppeteer -->
                         <div id="camposAzul" style="display:none;">
-                            <div class="row g-3">
-                                <div class="col-md-3">
+                            <div class="row g-3 align-items-end">
+                                <div class="col-md-4">
                                     <label class="form-label">Localizador <span class="text-danger">*</span></label>
                                     <input type="text" class="form-control text-uppercase" id="azulLocalizador"
                                            placeholder="Ex: VR6C3H" maxlength="10">
                                 </div>
-                                <div class="col-md-3">
+                                <div class="col-md-4">
                                     <label class="form-label">Origem <span class="text-danger">*</span></label>
                                     <select class="form-select" id="azulOrigem">
                                         <option value="">Selecione...</option>
                                         ${optsAeroportos}
                                     </select>
                                 </div>
-                                <div class="col-md-3">
-                                    <label class="form-label">Destino <span class="text-danger">*</span></label>
-                                    <select class="form-select" id="azulDestino">
-                                        <option value="">Selecione...</option>
-                                        ${optsAeroportos}
-                                    </select>
-                                </div>
-                                <div class="col-md-3">
-                                    <label class="form-label">Passageiro</label>
-                                    <input type="text" class="form-control text-uppercase" id="azulPassageiro"
-                                           placeholder="Nome do passageiro">
-                                </div>
-                            </div>
-                            <div class="row g-3 mt-1 align-items-end">
-                                <div class="col-md-3">
-                                    <label class="form-label">Data de Ida <span class="text-danger">*</span></label>
-                                    <input type="date" class="form-control" id="azulDataIda">
-                                </div>
-                                <div class="col-md-3">
-                                    <label class="form-label">Data de Volta</label>
-                                    <input type="date" class="form-control" id="azulDataVolta">
-                                </div>
-                                <div class="col-md-3 d-flex align-items-end">
+                                <div class="col-md-4 d-flex align-items-end">
                                     <button class="btn btn-success w-100" onclick="ReservasModule.adicionarReserva()">
-                                        <i class="bi bi-plus-circle"></i> Adicionar
+                                        <i class="bi bi-cloud-download"></i> Importar dados
                                     </button>
                                 </div>
                             </div>
@@ -456,62 +434,15 @@ const ReservasModule = {
         let dadosForm = { companhia: cia };
 
         if (cia === 'azul') {
-            const localizador  = document.getElementById('azulLocalizador').value.trim().toUpperCase();
-            const origem       = document.getElementById('azulOrigem').value;
-            const destino      = document.getElementById('azulDestino').value;
-            const passageiro   = document.getElementById('azulPassageiro').value.trim();
-            const dataIda      = document.getElementById('azulDataIda').value;
-            const dataVolta    = document.getElementById('azulDataVolta').value;
-
-            if (!localizador || !origem || !destino || !dataIda) {
-                App.showToast('Preencha Localizador, Origem, Destino e Data de Ida', 'error');
+            const localizador = document.getElementById('azulLocalizador').value.trim().toUpperCase();
+            const origem      = document.getElementById('azulOrigem').value;
+            if (!localizador || !origem) {
+                App.showToast('Preencha Localizador e Origem', 'error');
                 return;
             }
-
-            // Caminho direto: API Azul protegida por Akamai WAF (403 sem sessão autenticada)
-            const urlReserva = `https://www.voeazul.com.br/br/pt/home/minhas-viagens/confirmacao?pnr=${localizador}&origin=${origem}`;
-            const trechos = [{ tipo: 'ida', data: dataIda, origem, destino, companhia: 'AD', voo: '', horaPartida: '', horaChegada: '' }];
-            if (dataVolta) trechos.push({ tipo: 'volta', data: dataVolta, origem: destino, destino: origem, companhia: 'AD', voo: '', horaPartida: '', horaChegada: '' });
-            const bilhete = {
-                companhia: 'AD', codigoReserva: localizador, passageiroNome: passageiro,
-                origem, destino, dataIda, dataVolta: dataVolta || '',
-                horaPartida: '', horaChegada: '', _horaPartidaVolta: '', _horaChegadaVolta: '',
-                numeroVoo: '', _numeroVooVolta: '', cabine: '', bagagem: '',
-                dataEmissao: new Date().toISOString(), trechos
-            };
-            const locChave   = localizador.toUpperCase();
-            const todas      = Storage.getReservas();
-            const jaExiste   = todas.find(r => r.localizador?.toUpperCase() === locChave && r.companhia === 'azul');
-            const jaExisteDb = this._dbReservas.find(r => r.localizador?.toUpperCase() === locChave && r.companhia === 'azul');
-            const dadosReserva = {
-                companhia: 'azul', localizador, dataIda, dataVolta: dataVolta || '',
-                origem, destino, urlReserva, _bilhete: bilhete,
-                emitidoPor: document.getElementById('reservaEmitidoPor')?.value || ''
-            };
-            let reservaFinal;
-            if (jaExiste) {
-                Storage.updateReserva(jaExiste.id, dadosReserva);
-                reservaFinal = { ...jaExiste, ...dadosReserva };
-                if (jaExiste._savedInDb || jaExisteDb) {
-                    const idDb = jaExisteDb?.id || jaExiste.id;
-                    fetch(`/api/reservas/${idDb}`, {
-                        method: 'PUT',
-                        headers: this._authHeaders(),
-                        body: JSON.stringify({ dataIda, dataVolta: dataVolta || null, origem, destino, urlReserva, bilhete: JSON.stringify(bilhete) })
-                    }).catch(e => console.warn('[ReservasModule] Erro ao atualizar Azul:', e.message));
-                }
-                App.showToast('Reserva Azul atualizada!', 'success');
-            } else {
-                reservaFinal = Storage.addReserva({
-                    ...dadosReserva,
-                    clienteId: '', fornecedorId: '', valorVenda: 0, custos: 0, saldo: 0,
-                    dataEmissao: new Date().toLocaleDateString('pt-BR'), _savedInDb: false
-                });
-                this._registrarAlerta(reservaFinal);
-                App.showToast('Reserva Azul adicionada!', 'success');
-            }
-            this.carregarGrid();
-            return;
+            url = `https://www.voeazul.com.br/br/pt/home/minhas-viagens/confirmacao?pnr=${localizador}&origin=${origem}`;
+            dadosForm = { ...dadosForm, localizador, origem };
+            // cai para o bloco Puppeteer abaixo
 
         } else if (cia === 'gol') {
             const localizador = document.getElementById('golLocalizador').value.trim().toUpperCase();
@@ -547,12 +478,21 @@ const ReservasModule = {
                 emitidoPor: document.getElementById('reservaEmitidoPor')?.value || ''
             };
             let reservaFinal;
-            if (jaExiste) {
-                Storage.updateReserva(jaExiste.id, dadosReserva);
-                reservaFinal = { ...jaExiste, ...dadosReserva };
-                if (jaExiste._savedInDb || jaExisteDb) {
-                    const idDb = jaExisteDb?.id || jaExiste.id;
-                    fetch(`/api/reservas/${idDb}`, {
+            const idDbGol = jaExisteDb?.id || (jaExiste?._savedInDb ? jaExiste.id : null);
+            if (jaExiste || jaExisteDb) {
+                if (jaExiste) {
+                    Storage.updateReserva(jaExiste.id, dadosReserva);
+                    reservaFinal = { ...jaExiste, ...dadosReserva };
+                }
+                // Atualiza array _dbReservas em memória para que carregarGrid reflita os novos dados
+                if (jaExisteDb) {
+                    const dbIdx = this._dbReservas.findIndex(r => r.id === jaExisteDb.id);
+                    if (dbIdx !== -1) {
+                        this._dbReservas[dbIdx] = { ...this._dbReservas[dbIdx], ...dadosReserva, _bilhete: bilhete, _savedInDb: true };
+                    }
+                }
+                if (idDbGol) {
+                    fetch(`/api/reservas/${idDbGol}`, {
                         method: 'PUT',
                         headers: this._authHeaders(),
                         body: JSON.stringify({ dataIda, dataVolta: dataVolta || null, origem, destino, urlReserva, bilhete: JSON.stringify(bilhete) })
@@ -563,7 +503,7 @@ const ReservasModule = {
                 reservaFinal = Storage.addReserva({
                     ...dadosReserva,
                     clienteId: '', fornecedorId: '', valorVenda: 0, custos: 0, saldo: 0,
-                    dataEmissao: new Date().toLocaleDateString('pt-BR'), _savedInDb: false
+                    dataEmissao: new Date().toISOString(), _savedInDb: false
                 });
                 this._registrarAlerta(reservaFinal);
                 App.showToast('Reserva GOL adicionada!', 'success');
@@ -644,13 +584,21 @@ const ReservasModule = {
             };
 
             let reservaFinal;
-            if (jaExiste) {
-                // Atualiza preservando cliente, fornecedor e valores financeiros
-                Storage.updateReserva(jaExiste.id, dadosReserva);
-                reservaFinal = { ...jaExiste, ...dadosReserva };
-                if (jaExiste._savedInDb || jaExisteDb) {
-                    const idDb = jaExisteDb?.id || jaExiste.id;
-                    fetch(`/api/reservas/${idDb}`, {
+            const idDbPuppeteer = jaExisteDb?.id || (jaExiste?._savedInDb ? jaExiste.id : null);
+            if (jaExiste || jaExisteDb) {
+                if (jaExiste) {
+                    Storage.updateReserva(jaExiste.id, dadosReserva);
+                    reservaFinal = { ...jaExiste, ...dadosReserva };
+                }
+                // Atualiza _dbReservas em memória imediatamente
+                if (jaExisteDb) {
+                    const dbIdx = this._dbReservas.findIndex(r => r.id === jaExisteDb.id);
+                    if (dbIdx !== -1) {
+                        this._dbReservas[dbIdx] = { ...this._dbReservas[dbIdx], ...dadosReserva, _bilhete: bilhete, _savedInDb: true };
+                    }
+                }
+                if (idDbPuppeteer) {
+                    fetch(`/api/reservas/${idDbPuppeteer}`, {
                         method: 'PUT',
                         headers: this._authHeaders(),
                         body: JSON.stringify({
@@ -663,7 +611,7 @@ const ReservasModule = {
                         })
                     }).catch(e => console.warn('[ReservasModule] Erro ao atualizar no banco:', e.message));
                 }
-                App.showToast('Reserva atualizada (localizador já existia)!', 'success');
+                App.showToast('Reserva atualizada com sucesso!', 'success');
             } else {
                 reservaFinal = Storage.addReserva({
                     ...dadosReserva,
@@ -672,10 +620,9 @@ const ReservasModule = {
                     valorVenda:   0,
                     custos:       0,
                     saldo:        0,
-                    dataEmissao:  new Date().toLocaleDateString('pt-BR'),
+                    dataEmissao:  new Date().toISOString(),
                     _savedInDb:   false
                 });
-                // Registra alerta de check-in no backend
                 this._registrarAlerta(reservaFinal);
                 App.showToast('Reserva adicionada com sucesso!', 'success');
             }
