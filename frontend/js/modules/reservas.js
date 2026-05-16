@@ -128,25 +128,42 @@ const ReservasModule = {
                             </div>
                         </div>
 
-                        <!-- VoeGOL: Localizador + Sobrenome + Origem -->
+                        <!-- VoeGOL: dados manuais (sem Puppeteer) -->
                         <div id="camposGol" style="display:none;">
                             <div class="row g-3">
                                 <div class="col-md-3">
-                                    <label class="form-label">Localizador</label>
+                                    <label class="form-label">Localizador <span class="text-danger">*</span></label>
                                     <input type="text" class="form-control text-uppercase" id="golLocalizador"
                                            placeholder="Ex: VR6C3H" maxlength="10">
                                 </div>
                                 <div class="col-md-3">
-                                    <label class="form-label">Sobrenome do Passageiro</label>
+                                    <label class="form-label">Sobrenome</label>
                                     <input type="text" class="form-control text-uppercase" id="golSobrenome"
                                            placeholder="Ex: SILVA">
                                 </div>
                                 <div class="col-md-3">
-                                    <label class="form-label">Aeroporto de Origem</label>
+                                    <label class="form-label">Origem <span class="text-danger">*</span></label>
                                     <select class="form-select" id="golOrigem">
                                         <option value="">Selecione...</option>
                                         ${optsAeroportos}
                                     </select>
+                                </div>
+                                <div class="col-md-3">
+                                    <label class="form-label">Destino <span class="text-danger">*</span></label>
+                                    <select class="form-select" id="golDestino">
+                                        <option value="">Selecione...</option>
+                                        ${optsAeroportos}
+                                    </select>
+                                </div>
+                            </div>
+                            <div class="row g-3 mt-1 align-items-end">
+                                <div class="col-md-3">
+                                    <label class="form-label">Data de Ida <span class="text-danger">*</span></label>
+                                    <input type="date" class="form-control" id="golDataIda">
+                                </div>
+                                <div class="col-md-3">
+                                    <label class="form-label">Data de Volta</label>
+                                    <input type="date" class="form-control" id="golDataVolta">
                                 </div>
                                 <div class="col-md-3 d-flex align-items-end">
                                     <button class="btn btn-success w-100" onclick="ReservasModule.adicionarReserva()">
@@ -154,9 +171,10 @@ const ReservasModule = {
                                     </button>
                                 </div>
                             </div>
-                            <div class="row g-3 mt-1 align-items-end">
+                            <hr class="my-2">
+                            <div class="row g-3 align-items-end">
                                 <div class="col-md-9">
-                                    <label class="form-label">Ou importe o PDF do e-mail de confirmação</label>
+                                    <label class="form-label text-muted">Ou importe o PDF de confirmação do e-mail GOL</label>
                                     <input type="file" class="form-control" id="golPdfInput" accept=".pdf">
                                 </div>
                                 <div class="col-md-3">
@@ -429,12 +447,59 @@ const ReservasModule = {
             const localizador = document.getElementById('golLocalizador').value.trim().toUpperCase();
             const sobrenome   = document.getElementById('golSobrenome').value.trim();
             const origem      = document.getElementById('golOrigem').value;
-            if (!localizador || !sobrenome || !origem) {
-                App.showToast('Preencha Localizador, Sobrenome e Origem', 'error');
+            const destino     = document.getElementById('golDestino').value;
+            const dataIda     = document.getElementById('golDataIda').value;
+            const dataVolta   = document.getElementById('golDataVolta').value;
+
+            if (!localizador || !origem || !destino || !dataIda) {
+                App.showToast('Preencha Localizador, Origem, Destino e Data de Ida', 'error');
                 return;
             }
-            url = `https://b2c.voegol.com.br/minhas-viagens/encontrar-viagem?codigoReserva=${localizador}&origem=${origem}&sobrenome=${encodeURIComponent(sobrenome)}`;
-            dadosForm = { ...dadosForm, localizador, sobrenome, origem };
+
+            // Caminho direto: sem Puppeteer (site GOL bloqueado por Cloudflare no servidor)
+            const urlReserva = `https://b2c.voegol.com.br/minhas-viagens/encontrar-viagem?codigoReserva=${localizador}&origem=${origem}${sobrenome ? '&sobrenome=' + encodeURIComponent(sobrenome.toLowerCase()) : ''}`;
+            const trechos = [{ tipo: 'ida', data: dataIda, origem, destino, companhia: 'G3', voo: '', horaPartida: '', horaChegada: '' }];
+            if (dataVolta) trechos.push({ tipo: 'volta', data: dataVolta, origem: destino, destino: origem, companhia: 'G3', voo: '', horaPartida: '', horaChegada: '' });
+            const bilhete = {
+                companhia: 'G3', codigoReserva: localizador, passageiroNome: sobrenome,
+                origem, destino, dataIda, dataVolta: dataVolta || '',
+                horaPartida: '', horaChegada: '', _horaPartidaVolta: '', _horaChegadaVolta: '',
+                numeroVoo: '', _numeroVooVolta: '', cabine: '', bagagem: '',
+                dataEmissao: new Date().toISOString(), trechos
+            };
+            const locChave   = localizador.toUpperCase();
+            const todas      = Storage.getReservas();
+            const jaExiste   = todas.find(r => r.localizador?.toUpperCase() === locChave && r.companhia === 'gol');
+            const jaExisteDb = this._dbReservas.find(r => r.localizador?.toUpperCase() === locChave && r.companhia === 'gol');
+            const dadosReserva = {
+                companhia: 'gol', localizador, dataIda, dataVolta: dataVolta || '',
+                origem, destino, urlReserva, _bilhete: bilhete,
+                emitidoPor: document.getElementById('reservaEmitidoPor')?.value || ''
+            };
+            let reservaFinal;
+            if (jaExiste) {
+                Storage.updateReserva(jaExiste.id, dadosReserva);
+                reservaFinal = { ...jaExiste, ...dadosReserva };
+                if (jaExiste._savedInDb || jaExisteDb) {
+                    const idDb = jaExisteDb?.id || jaExiste.id;
+                    fetch(`/api/reservas/${idDb}`, {
+                        method: 'PUT',
+                        headers: this._authHeaders(),
+                        body: JSON.stringify({ dataIda, dataVolta: dataVolta || null, origem, destino, urlReserva, bilhete: JSON.stringify(bilhete) })
+                    }).catch(e => console.warn('[ReservasModule] Erro ao atualizar GOL:', e.message));
+                }
+                App.showToast('Reserva GOL atualizada!', 'success');
+            } else {
+                reservaFinal = Storage.addReserva({
+                    ...dadosReserva,
+                    clienteId: '', fornecedorId: '', valorVenda: 0, custos: 0, saldo: 0,
+                    dataEmissao: new Date().toLocaleDateString('pt-BR'), _savedInDb: false
+                });
+                this._registrarAlerta(reservaFinal);
+                App.showToast('Reserva GOL adicionada!', 'success');
+            }
+            this.carregarGrid();
+            return;
 
         } else if (cia === 'latam') {
             const numeroPedido = document.getElementById('latamNumeroPedido').value.trim();
