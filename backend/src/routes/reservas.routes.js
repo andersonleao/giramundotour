@@ -177,7 +177,8 @@ function extrairPassageiro(root, pageHtml) {
     return '';
 }
 
-function extrairBilheteAzul(apiData, pageHtml) {
+function extrairBilheteAzul(apiData, pageHtml, pageText) {
+    pageText = pageText || '';
     // ── Diagnóstico — salva para inspeção (como GOL) ──────────────────
     try {
         const logDir  = path.join(__dirname, '../../../backend/data');
@@ -291,9 +292,16 @@ function extrairBilheteAzul(apiData, pageHtml) {
         else          volta = result;
     }
 
-    const bilheteData = { passageiroNome, tripType: root.tripType || '', ida, volta };
-    console.log('[Reservas] bilheteData:', JSON.stringify(bilheteData));
-    return bilheteData;
+    // Se extraiu dados via API Azul, retorna
+    if (ida?.data || ida?.origem) {
+        const bilheteData = { passageiroNome, tripType: root.tripType || '', ida, volta };
+        console.log('[Reservas] bilheteData (via API Azul):', JSON.stringify(bilheteData));
+        return bilheteData;
+    }
+
+    // Fallback: tenta extração genérica (script tags, datas no HTML, etc.)
+    console.log('[Reservas] API Azul não encontrada — usando extração genérica como fallback');
+    return extrairBilheteGenerico('Azul', 'AD', 'AD[\\s\\-]?(\\d{3,4})', apiData, pageText, pageHtml);
 }
 
 // ─────────────────────────────────────────────
@@ -447,8 +455,8 @@ function extrairDeJson(data, iataPrefix) {
 
     // ── Rotas IATA ────────────────────────────────────────────────────────────
     // 1) Regex em campos diretos (nome_campo : "XYZ")
-    const origemM  = str.match(/"(?:departureCode|originCode|departureAirport|originAirport|from|iataOrigin|stationDeparture|stationOrigin|departure_iata|origin_iata)"\s*:\s*"([A-Z]{3})"/);
-    const destinoM = str.match(/"(?:arrivalCode|destinationCode|arrivalAirport|destinationAirport|to|iataDestination|stationArrival|stationDestination|arrival_iata|destination_iata)"\s*:\s*"([A-Z]{3})"/);
+    const origemM  = str.match(/"(?:departureCode|originCode|departureAirport|originAirport|from|iataOrigin|stationDeparture|stationOrigin|departure_iata|origin_iata|departureStation|originStation)"\s*:\s*"([A-Z]{3})"/);
+    const destinoM = str.match(/"(?:arrivalCode|destinationCode|arrivalAirport|destinationAirport|to|iataDestination|stationArrival|stationDestination|arrival_iata|destination_iata|arrivalStation|destinationStation)"\s*:\s*"([A-Z]{3})"/);
 
     let origemCode  = origemM?.[1]  || '';
     let destinoCode = destinoM?.[1] || '';
@@ -934,23 +942,69 @@ router.post('/capturar', async (req, res) => {
             .catch(e => console.warn('[Reservas] Nav:', e.message));
 
         if (isAzul) {
-            // Azul: navega para /confirmacao?pnr=...&origin=... — SPA carrega booking direto, sem form
-            console.log(`[Azul] Aguardando booking API para: ${url}`);
+            // Azul: navega para /confirmacao?pnr=...&origin=... — SPA carrega booking direto
+            const urlObj  = new URL(url);
+            const pnrAzul = urlObj.searchParams.get('pnr')    || '';
+            const oriAzul = urlObj.searchParams.get('origin') || '';
+            console.log(`[Azul] pnr="${pnrAzul}" origin="${oriAzul}"`);
 
+            // Aguarda qualquer JSON da Azul (URL do b2c-api ou voeazul)
             const bookingApiFilter = resp => {
                 const u  = resp.url();
                 const ct = resp.headers()['content-type'] || '';
-                return u.includes('b2c-api.voeazul.com.br') &&
-                       (u.includes('/bookings/') || u.includes('/booking/')) &&
-                       ct.includes('application/json');
+                return (u.includes('b2c-api.voeazul.com.br') || u.includes('api.voeazul.com.br')) &&
+                       (ct.includes('application/json') || ct.includes('text/json'));
             };
             try {
-                await page.waitForResponse(bookingApiFilter, { timeout: 35000 });
-                console.log('[Azul] Booking API respondeu — aguardando +4s');
+                await page.waitForResponse(bookingApiFilter, { timeout: 30000 });
+                console.log('[Azul] API respondeu — aguardando +4s');
                 await new Promise(r => setTimeout(r, 4000));
             } catch (_) {
-                console.warn('[Azul] Booking API não respondeu — aguardando +8s');
-                await new Promise(r => setTimeout(r, 8000));
+                console.warn('[Azul] API não respondeu via listener — tentando chamada direta do browser...');
+            }
+
+            // Tenta chamar a API de booking diretamente do contexto do browser (tem cookies de sessão)
+            const jaTemBooking = apiData.some(e =>
+                (e.url?.includes('b2c-api.voeazul.com.br') || e.url?.includes('api.voeazul.com.br')) &&
+                e.data && Object.keys(e.data).length > 2
+            );
+            if (!jaTemBooking) {
+                try {
+                    const azulDirect = await page.evaluate(async (pnr, origin) => {
+                        const endpoints = [
+                            `https://b2c-api.voeazul.com.br/booking/v5/bookings/${pnr}?origin=${origin}`,
+                            `https://b2c-api.voeazul.com.br/booking/v4/bookings/${pnr}?origin=${origin}`,
+                            `https://b2c-api.voeazul.com.br/api/bookings/${pnr}?origin=${origin}`,
+                            `https://b2c-api.voeazul.com.br/booking/v5/bookings?recordLocator=${pnr}&origin=${origin}`,
+                        ];
+                        for (const ep of endpoints) {
+                            try {
+                                const resp = await fetch(ep, {
+                                    credentials: 'include',
+                                    headers: { 'Accept': 'application/json', 'X-Requested-With': 'XMLHttpRequest' }
+                                });
+                                if (resp.ok) {
+                                    const text = await resp.text();
+                                    if (text && text.length > 20) {
+                                        try { return { url: ep, data: JSON.parse(text) }; }
+                                        catch { return { url: ep, data: { rawText: text.substring(0, 300) } }; }
+                                    }
+                                }
+                            } catch (_) {}
+                        }
+                        return null;
+                    }, pnrAzul, oriAzul);
+                    if (azulDirect?.data) {
+                        apiData.push(azulDirect);
+                        console.log('[Azul] Chamada direta OK:', azulDirect.url);
+                    } else {
+                        console.log('[Azul] Chamada direta sem dados — aguardando +6s');
+                        await new Promise(r => setTimeout(r, 6000));
+                    }
+                } catch (e) {
+                    console.warn('[Azul] Erro na chamada direta:', e.message);
+                    await new Promise(r => setTimeout(r, 6000));
+                }
             }
 
         } else if (isLatam) {
@@ -1177,7 +1231,7 @@ router.post('/capturar', async (req, res) => {
 
         let bilheteData = null;
         if (isAzul) {
-            bilheteData = extrairBilheteAzul(apiData, pageHtml);
+            bilheteData = extrairBilheteAzul(apiData, pageHtml, pageText);
         } else if (isLatam) {
             bilheteData = extrairBilheteLatam(apiData, pageText, pageHtml);
         } else if (isGol) {
@@ -1911,6 +1965,21 @@ router.post('/capturar-pdf', authMiddleware, upload.single('pdf'), async (req, r
 // ─────────────────────────────────────────────
 
 router.use(authMiddleware);
+
+/**
+// Debug: retorna o último arquivo de diagnóstico Azul gravado pelo extrairBilheteAzul
+router.get('/debug-azul', authMiddleware, (req, res) => {
+    try {
+        const logFile = path.join(__dirname, '../../../backend/data/azul_debug.json');
+        if (fs.existsSync(logFile)) {
+            res.json({ success: true, debug: JSON.parse(fs.readFileSync(logFile, 'utf8')) });
+        } else {
+            res.json({ success: false, message: 'Nenhum debug disponível — faça uma captura primeiro.' });
+        }
+    } catch (e) {
+        res.status(500).json({ success: false, message: e.message });
+    }
+});
 
 /**
  * GET /api/reservas
