@@ -105,44 +105,22 @@ const ReservasModule = {
                             </div>
                         </div>
 
-                        <!-- Azul: Localizador + Sobrenome + Origem + dados de voo -->
+                        <!-- Azul: Localizador + Origem -->
                         <div id="camposAzul" style="display:none;">
                             <div class="row g-3">
-                                <div class="col-md-3">
-                                    <label class="form-label">Localizador <span class="text-danger">*</span></label>
+                                <div class="col-md-4">
+                                    <label class="form-label">Localizador</label>
                                     <input type="text" class="form-control text-uppercase" id="azulLocalizador"
                                            placeholder="Ex: VR6C3H" maxlength="10">
                                 </div>
-                                <div class="col-md-3">
-                                    <label class="form-label">Sobrenome <span class="text-danger">*</span></label>
-                                    <input type="text" class="form-control text-uppercase" id="azulSobrenome"
-                                           placeholder="Ex: SILVA">
-                                </div>
-                                <div class="col-md-3">
-                                    <label class="form-label">Origem <span class="text-danger">*</span></label>
+                                <div class="col-md-4">
+                                    <label class="form-label">Aeroporto de Origem</label>
                                     <select class="form-select" id="azulOrigem">
                                         <option value="">Selecione...</option>
                                         ${optsAeroportos}
                                     </select>
                                 </div>
-                                <div class="col-md-3">
-                                    <label class="form-label">Destino <span class="text-danger">*</span></label>
-                                    <select class="form-select" id="azulDestino">
-                                        <option value="">Selecione...</option>
-                                        ${optsAeroportos}
-                                    </select>
-                                </div>
-                            </div>
-                            <div class="row g-3 mt-1 align-items-end">
-                                <div class="col-md-3">
-                                    <label class="form-label">Data de Ida <span class="text-danger">*</span></label>
-                                    <input type="date" class="form-control" id="azulDataIda">
-                                </div>
-                                <div class="col-md-3">
-                                    <label class="form-label">Data de Volta</label>
-                                    <input type="date" class="form-control" id="azulDataVolta">
-                                </div>
-                                <div class="col-md-3 d-flex align-items-end">
+                                <div class="col-md-4 d-flex align-items-end">
                                     <button class="btn btn-success w-100" onclick="ReservasModule.adicionarReserva()">
                                         <i class="bi bi-plus-circle"></i> Adicionar
                                     </button>
@@ -457,61 +435,13 @@ const ReservasModule = {
 
         if (cia === 'azul') {
             const localizador = document.getElementById('azulLocalizador').value.trim().toUpperCase();
-            const sobrenome   = document.getElementById('azulSobrenome').value.trim();
             const origem      = document.getElementById('azulOrigem').value;
-            const destino     = document.getElementById('azulDestino').value;
-            const dataIda     = document.getElementById('azulDataIda').value;
-            const dataVolta   = document.getElementById('azulDataVolta').value;
-
-            if (!localizador || !sobrenome || !origem || !destino || !dataIda) {
-                App.showToast('Preencha Localizador, Sobrenome, Origem, Destino e Data de Ida', 'error');
+            if (!localizador || !origem) {
+                App.showToast('Preencha Localizador e Origem', 'error');
                 return;
             }
-
-            // Caminho direto: salva a reserva imediatamente com os dados do formulário
-            const urlReserva = `https://www.voeazul.com.br/br/pt/home/minhas-viagens/confirmacao?pnr=${localizador}&origin=${origem}`;
-            const trechos = [{ tipo: 'ida', data: dataIda, origem, destino, companhia: 'AD', voo: '', horaPartida: '', horaChegada: '' }];
-            if (dataVolta) trechos.push({ tipo: 'volta', data: dataVolta, origem: destino, destino: origem, companhia: 'AD', voo: '', horaPartida: '', horaChegada: '' });
-            const bilhete = {
-                companhia: 'AD', codigoReserva: localizador, passageiroNome: sobrenome,
-                origem, destino, dataIda, dataVolta: dataVolta || '',
-                horaPartida: '', horaChegada: '', _horaPartidaVolta: '', _horaChegadaVolta: '',
-                numeroVoo: '', _numeroVooVolta: '', cabine: '', bagagem: '',
-                dataEmissao: new Date().toISOString(), trechos
-            };
-            const locChave   = localizador.toUpperCase();
-            const todas      = Storage.getReservas();
-            const jaExiste   = todas.find(r => r.localizador?.toUpperCase() === locChave && r.companhia === 'azul');
-            const jaExisteDb = this._dbReservas.find(r => r.localizador?.toUpperCase() === locChave && r.companhia === 'azul');
-            const dadosReserva = {
-                companhia: 'azul', localizador, dataIda, dataVolta: dataVolta || '',
-                origem, destino, urlReserva, _bilhete: bilhete,
-                emitidoPor: document.getElementById('reservaEmitidoPor')?.value || ''
-            };
-            let reservaFinal;
-            if (jaExiste) {
-                Storage.updateReserva(jaExiste.id, dadosReserva);
-                reservaFinal = { ...jaExiste, ...dadosReserva };
-                if (jaExiste._savedInDb || jaExisteDb) {
-                    const idDb = jaExisteDb?.id || jaExiste.id;
-                    fetch(`/api/reservas/${idDb}`, {
-                        method: 'PUT',
-                        headers: this._authHeaders(),
-                        body: JSON.stringify({ dataIda, dataVolta: dataVolta || null, origem, destino, urlReserva, bilhete: JSON.stringify(bilhete) })
-                    }).catch(e => console.warn('[ReservasModule] Erro ao atualizar Azul:', e.message));
-                }
-                App.showToast('Reserva Azul atualizada!', 'success');
-            } else {
-                reservaFinal = Storage.addReserva({
-                    ...dadosReserva,
-                    clienteId: '', fornecedorId: '', valorVenda: 0, custos: 0, saldo: 0,
-                    dataEmissao: new Date().toLocaleDateString('pt-BR'), _savedInDb: false
-                });
-                this._registrarAlerta(reservaFinal);
-                App.showToast('Reserva Azul adicionada!', 'success');
-            }
-            this.carregarGrid();
-            return;
+            url = `https://www.voeazul.com.br/br/pt/home/minhas-viagens/confirmacao?pnr=${localizador}&origin=${origem}`;
+            dadosForm = { ...dadosForm, localizador, origem };
 
         } else if (cia === 'gol') {
             const localizador = document.getElementById('golLocalizador').value.trim().toUpperCase();

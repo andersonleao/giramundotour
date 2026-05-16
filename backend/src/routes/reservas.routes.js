@@ -934,62 +934,23 @@ router.post('/capturar', async (req, res) => {
             .catch(e => console.warn('[Reservas] Nav:', e.message));
 
         if (isAzul) {
-            // Azul: SPA Navitaire — preenche form minhas-viagens com PNR + sobrenome e submete
-            const urlObj        = new URL(url);
-            const pnrAzul       = urlObj.searchParams.get('pnr') || '';
-            const sobrenomeAzul = decodeURIComponent(urlObj.searchParams.get('sobrenome') || '');
-            console.log(`[Azul] pnr="${pnrAzul}" sob="${sobrenomeAzul}"`);
+            // Azul: navega para /confirmacao?pnr=...&origin=... — SPA carrega booking direto, sem form
+            console.log(`[Azul] Aguardando booking API para: ${url}`);
 
+            const bookingApiFilter = resp => {
+                const u  = resp.url();
+                const ct = resp.headers()['content-type'] || '';
+                return u.includes('b2c-api.voeazul.com.br') &&
+                       (u.includes('/bookings/') || u.includes('/booking/')) &&
+                       ct.includes('application/json');
+            };
             try {
-                await page.waitForSelector('input', { timeout: 25000 });
-                await new Promise(r => setTimeout(r, 3000));
-
-                const visibleInputs = await page.$$('input:not([type=hidden]):not([type=checkbox]):not([type=radio])');
-                console.log(`[Azul] Inputs encontrados: ${visibleInputs.length}`);
-
-                const typeInto = async (el, valor) => {
-                    if (!el || !valor) return;
-                    await el.click({ clickCount: 3 });
-                    await el.type(valor, { delay: 60 });
-                    await page.keyboard.press('Tab');
-                    await new Promise(r => setTimeout(r, 300));
-                };
-
-                // Ordem do form Azul: PNR (0), sobrenome (1)
-                await typeInto(visibleInputs[0], pnrAzul);
-                await typeInto(visibleInputs[1], sobrenomeAzul);
-
-                await new Promise(r => setTimeout(r, 1200));
-
-                // Clica no botão Consultar/Continuar
-                const clicou = await page.evaluate(() => {
-                    const btn = [...document.querySelectorAll('button, [type="submit"]')]
-                        .find(b => /consultar|buscar|continuar|verificar/i.test(b.textContent.trim()));
-                    if (btn) { btn.click(); return btn.textContent.trim(); }
-                    return false;
-                });
-                console.log('[Azul] Botão clicado:', clicou);
-
-                // Aguarda API de booking após submit
-                const bookingApiFilter = resp => {
-                    const u  = resp.url();
-                    const ct = resp.headers()['content-type'] || '';
-                    return u.includes('b2c-api.voeazul.com.br') &&
-                           (u.includes('/bookings/') || u.includes('/booking/')) &&
-                           ct.includes('application/json');
-                };
-                try {
-                    await page.waitForResponse(bookingApiFilter, { timeout: 30000 });
-                    console.log('[Azul] Booking API respondeu — aguardando +5s');
-                    await new Promise(r => setTimeout(r, 5000));
-                } catch (_) {
-                    console.warn('[Azul] Booking API não respondeu — aguardando +10s');
-                    await new Promise(r => setTimeout(r, 10000));
-                }
-
-            } catch (e) {
-                console.warn('[Azul] Erro no form:', e.message);
-                await new Promise(r => setTimeout(r, 15000));
+                await page.waitForResponse(bookingApiFilter, { timeout: 35000 });
+                console.log('[Azul] Booking API respondeu — aguardando +4s');
+                await new Promise(r => setTimeout(r, 4000));
+            } catch (_) {
+                console.warn('[Azul] Booking API não respondeu — aguardando +8s');
+                await new Promise(r => setTimeout(r, 8000));
             }
 
         } else if (isLatam) {
