@@ -128,18 +128,39 @@ const ReservasModule = {
                             </div>
                         </div>
 
-                        <!-- VoeGOL: importação via PDF -->
+                        <!-- VoeGOL: Localizador + Sobrenome + Origem -->
                         <div id="camposGol" style="display:none;">
-                            <div class="row g-3 align-items-end">
-                                <div class="col-md-8">
-                                    <label class="form-label">Bilhete GOL (PDF)</label>
-                                    <input type="file" class="form-control" id="golPdfInput" accept=".pdf">
-                                    <div class="form-text text-muted">
-                                        PDF de confirmação enviado pela GOL por e-mail.
-                                    </div>
+                            <div class="row g-3">
+                                <div class="col-md-3">
+                                    <label class="form-label">Localizador</label>
+                                    <input type="text" class="form-control text-uppercase" id="golLocalizador"
+                                           placeholder="Ex: VR6C3H" maxlength="10">
                                 </div>
-                                <div class="col-md-4">
-                                    <button class="btn btn-success w-100" onclick="ReservasModule.importarPdfGol()">
+                                <div class="col-md-3">
+                                    <label class="form-label">Sobrenome do Passageiro</label>
+                                    <input type="text" class="form-control text-uppercase" id="golSobrenome"
+                                           placeholder="Ex: SILVA">
+                                </div>
+                                <div class="col-md-3">
+                                    <label class="form-label">Aeroporto de Origem</label>
+                                    <select class="form-select" id="golOrigem">
+                                        <option value="">Selecione...</option>
+                                        ${optsAeroportos}
+                                    </select>
+                                </div>
+                                <div class="col-md-3 d-flex align-items-end">
+                                    <button class="btn btn-success w-100" onclick="ReservasModule.adicionarReserva()">
+                                        <i class="bi bi-plus-circle"></i> Adicionar
+                                    </button>
+                                </div>
+                            </div>
+                            <div class="row g-3 mt-1 align-items-end">
+                                <div class="col-md-9">
+                                    <label class="form-label">Ou importe o PDF do e-mail de confirmação</label>
+                                    <input type="file" class="form-control" id="golPdfInput" accept=".pdf">
+                                </div>
+                                <div class="col-md-3">
+                                    <button class="btn btn-outline-success w-100" onclick="ReservasModule.importarPdfGol()">
                                         <i class="bi bi-file-earmark-arrow-up"></i> Importar PDF
                                     </button>
                                 </div>
