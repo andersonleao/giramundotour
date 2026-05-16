@@ -5,20 +5,15 @@
  *   - Azul: alerta às 00h do dia anterior ao voo (1 dia antes)
  *   - LATAM, Smiles e TAP: alerta às 00h 2 dias antes do voo
  *
- * Armazenamento: backend/data/alertas_checkin.json
- * Cron: diário às 00:00 (meia-noite)
+ * Armazenamento: tabela alertas_checkin no PostgreSQL (Neon)
+ * Cron: diário às 00:00 (meia-noite) OU via POST /api/alertas/verificar-agora
  */
 
-const fs             = require('fs');
-const path           = require('path');
-const nodemailer     = require('nodemailer');
-const cron           = require('node-cron');
-const WhatsAppService = require('./whatsapp.service');
-const { pool }        = require('../config/database');
+const nodemailer = require('nodemailer');
+const cron       = require('node-cron');
+const { pool }   = require('../config/database');
 
-// ─── Caminhos ────────────────────────────────────────────────────────────────
-const DATA_DIR  = path.join(__dirname, '../../data');
-const DATA_FILE = path.join(DATA_DIR, 'alertas_checkin.json');
+const WHATSAPP_ENABLED = process.env.WHATSAPP_ENABLED === 'true';
 
 // ─── Configuração por companhia ───────────────────────────────────────────────
 const CIA_CONFIG = {
@@ -56,77 +51,81 @@ const CIA_CONFIG = {
 
 const EMAIL_DESTINO = 'giramundotourag@gmail.com';
 
-// ─── Persistência ─────────────────────────────────────────────────────────────
+// ─── Banco de dados ───────────────────────────────────────────────────────────
 
-function carregarAlertas() {
-    if (!fs.existsSync(DATA_FILE)) return [];
+async function criarTabelaSeNecessario() {
+    await pool.query(`
+        CREATE TABLE IF NOT EXISTS alertas_checkin (
+            id SERIAL PRIMARY KEY,
+            "reservaId" TEXT NOT NULL UNIQUE,
+            companhia TEXT NOT NULL DEFAULT '',
+            localizador TEXT DEFAULT '',
+            "clienteNome" TEXT DEFAULT '',
+            "clienteTelefone" TEXT DEFAULT '',
+            "dataIda" TEXT DEFAULT '',
+            "dataVolta" TEXT DEFAULT '',
+            origem TEXT DEFAULT '',
+            destino TEXT DEFAULT '',
+            "emitidoPor" TEXT DEFAULT '',
+            "alertaIdaEnviado" BOOLEAN DEFAULT FALSE,
+            "alertaVoltaEnviado" BOOLEAN DEFAULT FALSE,
+            "wppIdaEnviado" BOOLEAN DEFAULT FALSE,
+            "wppVoltaEnviado" BOOLEAN DEFAULT FALSE,
+            "registradoEm" TIMESTAMPTZ DEFAULT NOW()
+        )
+    `);
+}
+
+async function carregarAlertas() {
     try {
-        return JSON.parse(fs.readFileSync(DATA_FILE, 'utf8'));
+        const { rows } = await pool.query('SELECT * FROM alertas_checkin ORDER BY "registradoEm"');
+        return rows;
     } catch (_) {
         return [];
     }
 }
 
-function salvarAlertas(alertas) {
-    if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
-    fs.writeFileSync(DATA_FILE, JSON.stringify(alertas, null, 2), 'utf8');
+async function registrar(reserva) {
+    await pool.query(`
+        INSERT INTO alertas_checkin
+            ("reservaId", companhia, localizador, "clienteNome", "clienteTelefone",
+             "dataIda", "dataVolta", origem, destino, "emitidoPor")
+        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+        ON CONFLICT ("reservaId") DO UPDATE SET
+            companhia        = EXCLUDED.companhia,
+            localizador      = EXCLUDED.localizador,
+            "clienteNome"    = COALESCE(NULLIF(EXCLUDED."clienteNome",''),    alertas_checkin."clienteNome"),
+            "clienteTelefone"= COALESCE(NULLIF(EXCLUDED."clienteTelefone",''),alertas_checkin."clienteTelefone"),
+            "dataIda"        = EXCLUDED."dataIda",
+            "dataVolta"      = EXCLUDED."dataVolta",
+            origem           = EXCLUDED.origem,
+            destino          = EXCLUDED.destino,
+            "emitidoPor"     = EXCLUDED."emitidoPor"
+    `, [
+        reserva.id,
+        reserva.companhia        || '',
+        reserva.localizador      || '',
+        reserva.clienteNome      || '',
+        reserva.clienteTelefone  || '',
+        reserva.dataIda          || '',
+        reserva.dataVolta        || '',
+        reserva.origem           || '',
+        reserva.destino          || '',
+        reserva.emitidoPor       || ''
+    ]);
+    console.log(`[Alertas] Registrado: ${reserva.localizador} (${reserva.companhia})`);
 }
 
-// ─── API pública ──────────────────────────────────────────────────────────────
-
-/**
- * Registra ou atualiza um alerta para uma reserva.
- * @param {object} reserva - { id, companhia, localizador, dataIda, dataVolta, clienteNome, clienteTelefone, origem, destino }
- */
-function registrar(reserva) {
-    const alertas = carregarAlertas();
-    const idx = alertas.findIndex(a => a.reservaId === reserva.id);
-    const registro = {
-        reservaId:              reserva.id,
-        companhia:              reserva.companhia       || '',
-        localizador:            reserva.localizador     || '',
-        clienteNome:            reserva.clienteNome     || '',
-        clienteTelefone:        reserva.clienteTelefone || '',
-        dataIda:                reserva.dataIda         || '',
-        dataVolta:              reserva.dataVolta       || '',
-        origem:                 reserva.origem          || '',
-        destino:                reserva.destino         || '',
-        emitidoPor:             reserva.emitidoPor      || '',
-        alertaIdaEnviado:       false,
-        alertaVoltaEnviado:     false,
-        wppIdaEnviado:          false,
-        wppVoltaEnviado:        false,
-        registradoEm:           new Date().toISOString()
-    };
-
-    if (idx >= 0) {
-        // Mantém o status de alertas já enviados
-        registro.alertaIdaEnviado   = alertas[idx].alertaIdaEnviado   || false;
-        registro.alertaVoltaEnviado = alertas[idx].alertaVoltaEnviado || false;
-        registro.wppIdaEnviado      = alertas[idx].wppIdaEnviado      || false;
-        registro.wppVoltaEnviado    = alertas[idx].wppVoltaEnviado    || false;
-        // Preserva telefone se já estava cadastrado e o novo está vazio
-        if (!registro.clienteTelefone && alertas[idx].clienteTelefone) {
-            registro.clienteTelefone = alertas[idx].clienteTelefone;
-        }
-        alertas[idx] = registro;
-    } else {
-        alertas.push(registro);
-    }
-
-    salvarAlertas(alertas);
-    console.log(`[Alertas] Registrado: ${reserva.localizador} (${reserva.companhia}) tel=${registro.clienteTelefone || 'sem telefone'}`);
-}
-
-/**
- * Remove o alerta de uma reserva.
- * @param {string} reservaId
- */
-function remover(reservaId) {
-    const alertas = carregarAlertas();
-    const novos   = alertas.filter(a => a.reservaId !== reservaId);
-    salvarAlertas(novos);
+async function remover(reservaId) {
+    await pool.query('DELETE FROM alertas_checkin WHERE "reservaId" = $1', [reservaId]);
     console.log(`[Alertas] Removido: reservaId=${reservaId}`);
+}
+
+async function marcarEnviado(reservaId, campo) {
+    await pool.query(
+        `UPDATE alertas_checkin SET "${campo}" = TRUE WHERE "reservaId" = $1`,
+        [reservaId]
+    );
 }
 
 // ─── Email ────────────────────────────────────────────────────────────────────
@@ -143,7 +142,6 @@ function criarTransporter() {
 
 function formatarData(dataStr) {
     if (!dataStr) return '';
-    // Suporta YYYY-MM-DD e DD/MM/YYYY
     const iso = dataStr.match(/^(\d{4})-(\d{2})-(\d{2})/);
     if (iso) return `${iso[3]}/${iso[2]}/${iso[1]}`;
     return dataStr;
@@ -162,7 +160,6 @@ function gerarCorpoEmail(alerta, tipo) {
 
     const labelTipo = tipo === 'ida' ? 'IDA' : 'VOLTA';
 
-    // URL de check-in com parâmetros por companhia
     const sobrenome = (alerta.clienteNome || '').trim().split(/\s+/).pop().toUpperCase();
     let checkinUrl = cia.checkinUrl;
     if (alerta.companhia === 'latam' && alerta.localizador) {
@@ -178,22 +175,13 @@ function gerarCorpoEmail(alerta, tipo) {
 <head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"></head>
 <body style="margin:0;padding:0;background-color:#f0f4f8;font-family:Arial,Helvetica,sans-serif;">
   <div style="max-width:600px;margin:32px auto;background:#ffffff;border-radius:10px;overflow:hidden;box-shadow:0 4px 16px rgba(0,0,0,0.12);">
-
-    <!-- Cabeçalho -->
     <div style="background:${cia.cor};padding:32px 28px;text-align:center;">
       <p style="margin:0 0 6px;color:rgba(255,255,255,0.8);font-size:13px;text-transform:uppercase;letter-spacing:1px;">Lembrete de Check-in • Trecho ${labelTipo}</p>
       <h1 style="margin:0;color:#ffffff;font-size:24px;font-weight:700;">${cia.nome}</h1>
     </div>
-
-    <!-- Corpo -->
     <div style="padding:32px 28px;">
       <p style="font-size:15px;color:#444;margin:0 0 6px;">Olá, equipe <strong>GiraMundoTour</strong>!</p>
-      <p style="font-size:14px;color:#666;margin:0 0 24px;">
-        O check-in para o voo abaixo já está disponível.<br>
-        Não esqueça de realizar antes do embarque!
-      </p>
-
-      <!-- Tabela de detalhes -->
+      <p style="font-size:14px;color:#666;margin:0 0 24px;">O check-in para o voo abaixo já está disponível.<br>Não esqueça de realizar antes do embarque!</p>
       <table style="width:100%;border-collapse:collapse;border-radius:8px;overflow:hidden;margin-bottom:28px;">
         <tr style="background:#f7f9fc;">
           <td style="padding:12px 16px;color:#888;font-size:13px;width:38%;border-bottom:1px solid #eee;">Localizador / Pedido</td>
@@ -203,11 +191,7 @@ function gerarCorpoEmail(alerta, tipo) {
           <td style="padding:12px 16px;color:#888;font-size:13px;border-bottom:1px solid #eee;">Companhia</td>
           <td style="padding:12px 16px;color:#444;font-size:14px;border-bottom:1px solid #eee;">${cia.nome}</td>
         </tr>
-        ${trecho ? `
-        <tr style="background:#f7f9fc;">
-          <td style="padding:12px 16px;color:#888;font-size:13px;border-bottom:1px solid #eee;">Trecho</td>
-          <td style="padding:12px 16px;color:#444;font-size:14px;border-bottom:1px solid #eee;">${trecho}</td>
-        </tr>` : ''}
+        ${trecho ? `<tr style="background:#f7f9fc;"><td style="padding:12px 16px;color:#888;font-size:13px;border-bottom:1px solid #eee;">Trecho</td><td style="padding:12px 16px;color:#444;font-size:14px;border-bottom:1px solid #eee;">${trecho}</td></tr>` : ''}
         <tr ${trecho ? '' : 'style="background:#f7f9fc;"'}>
           <td style="padding:12px 16px;color:#888;font-size:13px;border-bottom:1px solid #eee;">Data do Voo</td>
           <td style="padding:12px 16px;color:#222;font-size:15px;font-weight:700;border-bottom:1px solid #eee;">${dataFmt}</td>
@@ -221,46 +205,21 @@ function gerarCorpoEmail(alerta, tipo) {
           <td style="padding:12px 16px;color:#444;font-size:14px;font-weight:600;">${alerta.emitidoPor || '—'}</td>
         </tr>
       </table>
-
-      <!-- Botão de check-in -->
       <div style="text-align:center;margin:28px 0 20px;">
-        <a href="${checkinUrl}"
-           style="display:inline-block;background:${cia.cor};color:#ffffff;text-decoration:none;padding:15px 40px;border-radius:8px;font-size:16px;font-weight:700;letter-spacing:0.3px;">
-          Fazer Check-in Agora
-        </a>
+        <a href="${checkinUrl}" style="display:inline-block;background:${cia.cor};color:#ffffff;text-decoration:none;padding:15px 40px;border-radius:8px;font-size:16px;font-weight:700;letter-spacing:0.3px;">Fazer Check-in Agora</a>
       </div>
-
-      <p style="text-align:center;font-size:12px;color:#aaa;margin:0;">
-        Link direto: <a href="${checkinUrl}" style="color:${cia.cor};text-decoration:none;">${checkinUrl}</a>
-      </p>
+      <p style="text-align:center;font-size:12px;color:#aaa;margin:0;">Link direto: <a href="${checkinUrl}" style="color:${cia.cor};text-decoration:none;">${checkinUrl}</a></p>
     </div>
-
-    <!-- Rodapé -->
     <div style="background:#f7f9fc;padding:18px 28px;text-align:center;border-top:1px solid #eee;">
-      <p style="margin:0;font-size:12px;color:#aaa;">
-        GiraMundoTour &bull; giramundotourag@gmail.com &bull; Aviso automático de check-in
-      </p>
+      <p style="margin:0;font-size:12px;color:#aaa;">GiraMundoTour &bull; giramundotourag@gmail.com &bull; Aviso automático de check-in</p>
     </div>
-
   </div>
 </body>
 </html>`;
 }
 
-// ─── Mensagem WhatsApp/SMS ────────────────────────────────────────────────────
+// ─── Mensagem WhatsApp ────────────────────────────────────────────────────────
 
-/**
- * Gera o texto da mensagem WhatsApp de check-in.
- * O texto será definido pela equipe GiraMundoTour — edite a constante TEMPLATE_WPP abaixo.
- *
- * Placeholders disponíveis:
- *   {nome}        → nome do cliente (ex: "Maria Silva")
- *   {companhia}   → nome da companhia aérea (ex: "Azul Linhas Aéreas")
- *   {localizador} → código da reserva (ex: "ABC123")
- *   {data}        → data do voo formatada (ex: "15/03/2026")
- *   {trecho}      → rota do voo (ex: "GRU → SSA")
- *   {urlCheckin}  → link para check-in online
- */
 const TEMPLATE_WPP = `{nome}, sua viagem começa agora! ✈️
 
 Faça o seu check-in usando o código da reserva: *{localizador}*
@@ -274,11 +233,9 @@ function gerarMensagemWpp(alerta, tipo) {
     const dataStr  = tipo === 'ida' ? alerta.dataIda : alerta.dataVolta;
     const dataFmt  = formatarData(dataStr);
 
-    const origemTrecho  = alerta.origem  || '';
-    const destinoTrecho = alerta.destino || '';
     const trecho = tipo === 'ida'
-        ? (origemTrecho && destinoTrecho ? `${origemTrecho} → ${destinoTrecho}` : '')
-        : (destinoTrecho && origemTrecho ? `${destinoTrecho} → ${origemTrecho}` : '');
+        ? (alerta.origem && alerta.destino ? `${alerta.origem} → ${alerta.destino}` : '')
+        : (alerta.destino && alerta.origem ? `${alerta.destino} → ${alerta.origem}` : '');
 
     const sobrenome = (alerta.clienteNome || '').trim().split(/\s+/).pop().toUpperCase();
     let urlCheckin = cia.checkinUrl || '';
@@ -299,41 +256,23 @@ function gerarMensagemWpp(alerta, tipo) {
         .replace(/\{urlCheckin\}/g,  urlCheckin);
 }
 
-// ─── Verificação diária ────────────────────────────────────────────────────────
+// ─── Verificação diária ───────────────────────────────────────────────────────
 
-/**
- * Calcula quantos dias faltam para uma data (YYYY-MM-DD ou DD/MM/YYYY).
- * Retorna null se data inválida.
- */
 function diasParaData(dataStr) {
     if (!dataStr) return null;
-
     let ano, mes, dia;
     const iso = dataStr.match(/^(\d{4})-(\d{2})-(\d{2})/);
     const br  = dataStr.match(/^(\d{2})\/(\d{2})\/(\d{4})/);
-
-    if (iso) {
-        [, ano, mes, dia] = iso;
-    } else if (br) {
-        [, dia, mes, ano] = br;
-    } else {
-        return null;
-    }
-
+    if (iso) { [, ano, mes, dia] = iso; }
+    else if (br) { [, dia, mes, ano] = br; }
+    else return null;
     const dataVoo = new Date(`${ano}-${mes}-${dia}T00:00:00Z`);
     const hoje    = new Date();
     hoje.setUTCHours(0, 0, 0, 0);
-
     return Math.floor((dataVoo - hoje) / (1000 * 60 * 60 * 24));
 }
 
-/**
- * Enriquece o alerta com clienteNome e emitidoPor do banco de dados,
- * para garantir dados atualizados no email mesmo que o alerta tenha
- * sido registrado antes de o cliente ser associado à reserva.
- */
 async function enriquecerComDB(alerta) {
-    if (!pool) return alerta;
     try {
         const { rows } = await pool.query(
             `SELECT r."emitidoPor", c.nome AS "clienteNome"
@@ -346,7 +285,7 @@ async function enriquecerComDB(alerta) {
             if (rows[0].clienteNome) alerta.clienteNome = rows[0].clienteNome;
             if (rows[0].emitidoPor)  alerta.emitidoPor  = rows[0].emitidoPor;
         }
-    } catch (_) { /* BD indisponível: usa dados do JSON */ }
+    } catch (_) {}
     return alerta;
 }
 
@@ -354,33 +293,29 @@ async function verificarEEnviar() {
     console.log('[Alertas] Verificando alertas de check-in...');
 
     if (!process.env.EMAIL_USER || !process.env.EMAIL_PASS) {
-        console.warn('[Alertas] EMAIL_USER ou EMAIL_PASS não configurados no .env — alertas desabilitados.');
+        console.warn('[Alertas] EMAIL_USER ou EMAIL_PASS não configurados — alertas desabilitados.');
         return;
     }
 
-    const alertas = carregarAlertas();
+    const alertas = await carregarAlertas();
     if (alertas.length === 0) {
         console.log('[Alertas] Nenhum alerta registrado.');
         return;
     }
 
     const transporter = criarTransporter();
-    let modificado    = false;
 
     for (const alerta of alertas) {
         const cia = CIA_CONFIG[alerta.companhia];
         if (!cia) continue;
 
-        // Enriquece com dados atualizados do BD (clienteNome, emitidoPor)
         await enriquecerComDB(alerta);
-
         const diasAnt = cia.diasAntecedencia;
 
-        // ── Verificar ida ──
+        // ── Ida ──
         if (alerta.dataIda && !alerta.alertaIdaEnviado) {
             const dias = diasParaData(alerta.dataIda);
             if (dias !== null && dias >= 0 && dias <= diasAnt) {
-                // Email para a agência
                 try {
                     await transporter.sendMail({
                         from:    `"GiraMundoTour" <${process.env.EMAIL_USER}>`,
@@ -388,21 +323,17 @@ async function verificarEEnviar() {
                         subject: `[Check-in] ${cia.nome} — Voo Ida em ${dias} dia(s) • ${alerta.localizador}`,
                         html:    gerarCorpoEmail(alerta, 'ida')
                     });
-                    alerta.alertaIdaEnviado = true;
-                    modificado = true;
-                    console.log(`[Alertas] Email IDA enviado: ${alerta.localizador} (${alerta.companhia}) — ${alerta.dataIda}`);
+                    await marcarEnviado(alerta.reservaId, 'alertaIdaEnviado');
+                    console.log(`[Alertas] Email IDA enviado: ${alerta.localizador}`);
                 } catch (err) {
-                    console.error(`[Alertas] Erro ao enviar email IDA: ${err.message}`);
+                    console.error(`[Alertas] Erro email IDA: ${err.message}`);
                 }
 
-                // WhatsApp para o cliente
-                if (alerta.clienteTelefone && !alerta.wppIdaEnviado) {
+                if (WHATSAPP_ENABLED && alerta.clienteTelefone && !alerta.wppIdaEnviado) {
                     try {
-                        const msg = gerarMensagemWpp(alerta, 'ida');
-                        await WhatsAppService.enviarMensagem(alerta.clienteTelefone, msg);
-                        alerta.wppIdaEnviado = true;
-                        modificado = true;
-                        console.log(`[Alertas] WhatsApp IDA enviado para ${alerta.clienteTelefone}: ${alerta.localizador}`);
+                        const WhatsAppService = require('./whatsapp.service');
+                        await WhatsAppService.enviarMensagem(alerta.clienteTelefone, gerarMensagemWpp(alerta, 'ida'));
+                        await marcarEnviado(alerta.reservaId, 'wppIdaEnviado');
                     } catch (err) {
                         console.warn(`[Alertas] WhatsApp IDA não enviado: ${err.message}`);
                     }
@@ -410,11 +341,10 @@ async function verificarEEnviar() {
             }
         }
 
-        // ── Verificar volta ──
+        // ── Volta ──
         if (alerta.dataVolta && !alerta.alertaVoltaEnviado) {
             const dias = diasParaData(alerta.dataVolta);
             if (dias !== null && dias >= 0 && dias <= diasAnt) {
-                // Email para a agência
                 try {
                     await transporter.sendMail({
                         from:    `"GiraMundoTour" <${process.env.EMAIL_USER}>`,
@@ -422,21 +352,17 @@ async function verificarEEnviar() {
                         subject: `[Check-in] ${cia.nome} — Voo Volta em ${dias} dia(s) • ${alerta.localizador}`,
                         html:    gerarCorpoEmail(alerta, 'volta')
                     });
-                    alerta.alertaVoltaEnviado = true;
-                    modificado = true;
-                    console.log(`[Alertas] Email VOLTA enviado: ${alerta.localizador} (${alerta.companhia}) — ${alerta.dataVolta}`);
+                    await marcarEnviado(alerta.reservaId, 'alertaVoltaEnviado');
+                    console.log(`[Alertas] Email VOLTA enviado: ${alerta.localizador}`);
                 } catch (err) {
-                    console.error(`[Alertas] Erro ao enviar email VOLTA: ${err.message}`);
+                    console.error(`[Alertas] Erro email VOLTA: ${err.message}`);
                 }
 
-                // WhatsApp para o cliente
-                if (alerta.clienteTelefone && !alerta.wppVoltaEnviado) {
+                if (WHATSAPP_ENABLED && alerta.clienteTelefone && !alerta.wppVoltaEnviado) {
                     try {
-                        const msg = gerarMensagemWpp(alerta, 'volta');
-                        await WhatsAppService.enviarMensagem(alerta.clienteTelefone, msg);
-                        alerta.wppVoltaEnviado = true;
-                        modificado = true;
-                        console.log(`[Alertas] WhatsApp VOLTA enviado para ${alerta.clienteTelefone}: ${alerta.localizador}`);
+                        const WhatsAppService = require('./whatsapp.service');
+                        await WhatsAppService.enviarMensagem(alerta.clienteTelefone, gerarMensagemWpp(alerta, 'volta'));
+                        await marcarEnviado(alerta.reservaId, 'wppVoltaEnviado');
                     } catch (err) {
                         console.warn(`[Alertas] WhatsApp VOLTA não enviado: ${err.message}`);
                     }
@@ -445,34 +371,32 @@ async function verificarEEnviar() {
         }
     }
 
-    if (modificado) salvarAlertas(alertas);
     console.log('[Alertas] Verificação concluída.');
 }
 
 // ─── Cron job ─────────────────────────────────────────────────────────────────
 
 function iniciar() {
-    // Executa todos os dias à meia-noite (00:00)
+    criarTabelaSeNecessario()
+        .then(() => console.log('[Alertas] Tabela alertas_checkin verificada/criada'))
+        .catch(err => console.error('[Alertas] Erro ao criar tabela:', err.message));
+
     cron.schedule('0 0 * * *', () => {
         console.log('[Alertas] Cron job disparado às 00:00');
         verificarEEnviar();
     }, { timezone: 'America/Sao_Paulo' });
 
-    console.log('[Alertas] Serviço de alertas de check-in iniciado (cron: 00:00 diário)');
+    console.log('[Alertas] Serviço de alertas iniciado (cron: 00:00 diário)');
 }
 
-/**
- * Envia um email de teste para verificar a configuração SMTP.
- * Usa a primeira reserva registrada (ou dados genéricos de exemplo).
- */
+// ─── Email de teste ───────────────────────────────────────────────────────────
+
 async function enviarEmailTeste() {
     if (!process.env.EMAIL_USER || !process.env.EMAIL_PASS) {
-        throw new Error('EMAIL_USER ou EMAIL_PASS não configurados no .env');
+        throw new Error('EMAIL_USER ou EMAIL_PASS não configurados');
     }
 
-    const alertas = carregarAlertas();
-
-    // Usa primeira reserva real, ou dados de exemplo
+    const alertas = await carregarAlertas();
     const alertaExemplo = alertas[0] || {
         reservaId:   'TESTE',
         companhia:   'latam',
@@ -485,7 +409,6 @@ async function enviarEmailTeste() {
     };
 
     const transporter = criarTransporter();
-
     await transporter.sendMail({
         from:    `"GiraMundoTour" <${process.env.EMAIL_USER}>`,
         to:      EMAIL_DESTINO,
@@ -493,11 +416,7 @@ async function enviarEmailTeste() {
         html:    gerarCorpoEmail(alertaExemplo, 'ida')
     });
 
-    return {
-        para:        EMAIL_DESTINO,
-        localizador: alertaExemplo.localizador,
-        companhia:   alertaExemplo.companhia
-    };
+    return { para: EMAIL_DESTINO, localizador: alertaExemplo.localizador, companhia: alertaExemplo.companhia };
 }
 
 module.exports = { registrar, remover, iniciar, verificarEEnviar, enviarEmailTeste, carregarAlertas, gerarMensagemWpp };

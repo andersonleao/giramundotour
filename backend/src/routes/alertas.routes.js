@@ -23,26 +23,26 @@ const WhatsAppService  = WHATSAPP_ENABLED ? require('../services/whatsapp.servic
 const wppDisabled = (res) => res.status(503).json({ success: false, message: 'WhatsApp desabilitado neste servidor.' });
 
 // Registra ou atualiza alerta de check-in para uma reserva
-router.post('/registrar', (req, res) => {
+router.post('/registrar', async (req, res) => {
     const { id, companhia, localizador, dataIda, dataVolta, clienteNome, clienteTelefone, origem, destino, emitidoPor } = req.body;
 
     if (!id || !companhia) {
         return res.status(400).json({ success: false, message: 'id e companhia são obrigatórios' });
     }
 
-    AlertasService.registrar({ id, companhia, localizador, dataIda, dataVolta, clienteNome, clienteTelefone, origem, destino, emitidoPor });
+    await AlertasService.registrar({ id, companhia, localizador, dataIda, dataVolta, clienteNome, clienteTelefone, origem, destino, emitidoPor });
     res.json({ success: true, message: 'Alerta registrado' });
 });
 
 // Remove alerta de uma reserva
-router.delete('/:reservaId', (req, res) => {
-    AlertasService.remover(req.params.reservaId);
+router.delete('/:reservaId', async (req, res) => {
+    await AlertasService.remover(req.params.reservaId);
     res.json({ success: true, message: 'Alerta removido' });
 });
 
-// Lista todos os alertas registrados (útil para debug)
-router.get('/', (req, res) => {
-    res.json({ success: true, alertas: AlertasService.carregarAlertas() });
+// Lista todos os alertas registrados
+router.get('/', async (req, res) => {
+    res.json({ success: true, alertas: await AlertasService.carregarAlertas() });
 });
 
 // Dispara verificação de alertas imediatamente (sem aguardar o cron das 00h)
@@ -129,7 +129,7 @@ router.post('/whatsapp/testar-alerta', async (req, res) => {
         return res.status(400).json({ success: false, message: 'Informe o campo "telefone".' });
     }
     try {
-        const alertas = AlertasService.carregarAlertas();
+        const alertas = await AlertasService.carregarAlertas();
         let alerta;
         if (reservaId) {
             alerta = alertas.find(a => a.reservaId === reservaId);
