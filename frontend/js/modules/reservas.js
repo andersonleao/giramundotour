@@ -105,7 +105,7 @@ const ReservasModule = {
                             </div>
                         </div>
 
-                        <!-- Azul: localizador + origem → salva direto; destino/datas editáveis na grid -->
+                        <!-- Azul: localizador + origem — busca automática, modal de complemento se bloqueado -->
                         <div id="camposAzul" style="display:none;">
                             <div class="row g-3 align-items-end">
                                 <div class="col-md-4">
@@ -121,14 +121,56 @@ const ReservasModule = {
                                     </select>
                                 </div>
                                 <div class="col-md-4 d-flex align-items-end">
-                                    <button class="btn btn-success w-100" onclick="ReservasModule.adicionarReserva()">
-                                        <i class="bi bi-plus-circle"></i> Adicionar
+                                    <button class="btn btn-success w-100" id="btnAzulAdicionar"
+                                            onclick="ReservasModule.adicionarReserva()">
+                                        <i class="bi bi-cloud-download"></i> Importar
                                     </button>
                                 </div>
                             </div>
-                            <small class="text-muted mt-1 d-block">
-                                <i class="bi bi-info-circle"></i> Destino e datas serão preenchidos diretamente na grid após adicionar.
-                            </small>
+                        </div>
+
+                        <!-- Modal complemento Azul (aparece quando busca automática falha) -->
+                        <div class="modal fade" id="modalComplementoAzul" tabindex="-1" aria-hidden="true">
+                            <div class="modal-dialog modal-dialog-centered">
+                                <div class="modal-content">
+                                    <div class="modal-header bg-primary text-white py-2">
+                                        <h6 class="modal-title mb-0">
+                                            <i class="bi bi-airplane"></i> Complementar dados — Azul
+                                        </h6>
+                                    </div>
+                                    <div class="modal-body">
+                                        <p class="text-muted small mb-3">
+                                            Localizador: <strong id="azulModalLoc"></strong> &nbsp;|&nbsp;
+                                            Origem: <strong id="azulModalOri"></strong>
+                                        </p>
+                                        <div class="row g-3">
+                                            <div class="col-md-12">
+                                                <label class="form-label fw-semibold">Destino <span class="text-danger">*</span></label>
+                                                <select class="form-select" id="azulModalDestino">
+                                                    <option value="">Selecione...</option>
+                                                    ${optsAeroportos}
+                                                </select>
+                                            </div>
+                                            <div class="col-md-6">
+                                                <label class="form-label fw-semibold">Data de Ida <span class="text-danger">*</span></label>
+                                                <input type="date" class="form-control" id="azulModalDataIda">
+                                            </div>
+                                            <div class="col-md-6">
+                                                <label class="form-label fw-semibold">Data de Volta</label>
+                                                <input type="date" class="form-control" id="azulModalDataVolta">
+                                            </div>
+                                        </div>
+                                    </div>
+                                    <div class="modal-footer py-2">
+                                        <button type="button" class="btn btn-secondary btn-sm"
+                                                data-bs-dismiss="modal">Cancelar</button>
+                                        <button type="button" class="btn btn-primary btn-sm"
+                                                onclick="ReservasModule._salvarComplementoAzul()">
+                                            <i class="bi bi-check-circle"></i> Salvar reserva
+                                        </button>
+                                    </div>
+                                </div>
+                            </div>
                         </div>
 
                         <!-- VoeGOL: dados manuais (sem Puppeteer) -->
@@ -443,47 +485,48 @@ const ReservasModule = {
                 App.showToast('Preencha Localizador e Origem', 'error');
                 return;
             }
-            const urlReserva = `https://www.voeazul.com.br/br/pt/home/minhas-viagens/confirmacao?pnr=${localizador}&origin=${origem}`;
-            const bilhete = {
-                companhia: 'AD', codigoReserva: localizador, passageiroNome: '',
-                origem, destino: '', dataIda: '', dataVolta: '',
-                horaPartida: '', horaChegada: '', _horaPartidaVolta: '', _horaChegadaVolta: '',
-                numeroVoo: '', _numeroVooVolta: '', cabine: '', bagagem: '',
-                dataEmissao: new Date().toISOString(), trechos: []
-            };
-            const locChave   = localizador.toUpperCase();
-            const todas      = Storage.getReservas();
-            const jaExiste   = todas.find(r => r.localizador?.toUpperCase() === locChave && r.companhia === 'azul');
-            const jaExisteDb = this._dbReservas.find(r => r.localizador?.toUpperCase() === locChave && r.companhia === 'azul');
-            const dadosReserva = {
-                companhia: 'azul', localizador, origem, urlReserva, _bilhete: bilhete,
-                emitidoPor: document.getElementById('reservaEmitidoPor')?.value || ''
-            };
-            const idDbAzul = jaExisteDb?.id || (jaExiste?._savedInDb ? jaExiste.id : null);
-            if (jaExiste || jaExisteDb) {
-                if (jaExiste) Storage.updateReserva(jaExiste.id, dadosReserva);
-                if (jaExisteDb) {
-                    const dbIdx = this._dbReservas.findIndex(r => r.id === jaExisteDb.id);
-                    if (dbIdx !== -1) this._dbReservas[dbIdx] = { ...this._dbReservas[dbIdx], ...dadosReserva, _bilhete: bilhete, _savedInDb: true };
-                }
-                if (idDbAzul) {
-                    fetch(`/api/reservas/${idDbAzul}`, {
-                        method: 'PUT', headers: this._authHeaders(),
-                        body: JSON.stringify({ origem, urlReserva, bilhete: JSON.stringify(bilhete) })
-                    }).catch(e => console.warn('[Azul] Erro ao atualizar:', e.message));
-                }
-                App.showToast('Reserva Azul atualizada! Preencha destino e datas na grid.', 'info');
-            } else {
-                const nova = Storage.addReserva({
-                    ...dadosReserva,
-                    destino: '', dataIda: '', dataVolta: '',
-                    clienteId: '', fornecedorId: '', valorVenda: 0, custos: 0, saldo: 0,
-                    dataEmissao: new Date().toISOString(), _savedInDb: false
+            // Desabilita botão e mostra progresso
+            const btnAzul = document.getElementById('btnAzulAdicionar');
+            if (btnAzul) { btnAzul.disabled = true; btnAzul.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span> Buscando...'; }
+
+            // Tenta busca automática no backend
+            let bilheteData = null;
+            try {
+                const resp = await fetch('/api/reservas/azul-lookup', {
+                    method: 'POST', headers: this._authHeaders(),
+                    body: JSON.stringify({ pnr: localizador, origin: origem })
                 });
-                this._registrarAlerta(nova);
-                App.showToast('Reserva Azul adicionada! Preencha destino e datas na grid.', 'success');
+                const result = await resp.json();
+                if (result.success && result.bilheteData?.ida?.data) {
+                    bilheteData = result.bilheteData;
+                }
+            } catch (e) {
+                console.warn('[Azul] Lookup falhou:', e.message);
             }
-            this.carregarGrid();
+
+            if (btnAzul) { btnAzul.disabled = false; btnAzul.innerHTML = '<i class="bi bi-cloud-download"></i> Importar'; }
+
+            const urlReserva  = `https://www.voeazul.com.br/br/pt/home/minhas-viagens/confirmacao?pnr=${localizador}&origin=${origem}`;
+            const emitidoPor  = document.getElementById('reservaEmitidoPor')?.value || '';
+
+            if (bilheteData) {
+                // Busca automática OK — salva direto com todos os dados
+                this._salvarReservaAzul(localizador, origem, urlReserva, emitidoPor, bilheteData);
+            } else {
+                // Busca bloqueada — abre modal para o usuário completar os 3 campos restantes
+                document.getElementById('azulModalLoc').textContent = localizador;
+                document.getElementById('azulModalOri').textContent = origem;
+                document.getElementById('azulModalDestino').value  = '';
+                document.getElementById('azulModalDataIda').value  = '';
+                document.getElementById('azulModalDataVolta').value = '';
+                // Armazena contexto no modal para uso no callback
+                const modal = document.getElementById('modalComplementoAzul');
+                modal.dataset.localizador = localizador;
+                modal.dataset.origem      = origem;
+                modal.dataset.urlReserva  = urlReserva;
+                modal.dataset.emitidoPor  = emitidoPor;
+                new bootstrap.Modal(modal).show();
+            }
             return;
 
         } else if (cia === 'gol') {
@@ -1167,6 +1210,124 @@ const ReservasModule = {
         const dbR = this._dbReservas.find(r => r.id === id);
         if (dbR) { if (dbR._bilhete) dbR._bilhete[key] = valor; }
         else { const r = Storage.getReservaById(id); if (r?._bilhete) { r._bilhete[key] = valor; Storage.updateReserva(id, { _bilhete: r._bilhete, [campo]: valor }); } }
+        this.carregarGrid();
+    },
+
+    _salvarReservaAzul(localizador, origem, urlReserva, emitidoPor, bilheteData) {
+        const ida   = bilheteData?.ida  || {};
+        const volta = bilheteData?.volta || {};
+        const bilhete = {
+            companhia: 'AD', codigoReserva: localizador,
+            passageiroNome: bilheteData?.passageiroNome || '',
+            origem:   ida.origem  || origem,
+            destino:  ida.destino || '',
+            dataIda:  ida.data    || '',
+            dataVolta: volta.data || '',
+            horaPartida:       ida.horaPartida   || '',
+            horaChegada:       ida.horaChegada   || '',
+            _horaPartidaVolta: volta.horaPartida || '',
+            _horaChegadaVolta: volta.horaChegada || '',
+            numeroVoo:       ida.voo   || '',
+            _numeroVooVolta: volta.voo || '',
+            cabine: '', bagagem: '',
+            dataEmissao: new Date().toISOString(),
+            trechos: []
+        };
+        const trechos = [{ tipo: 'ida', data: bilhete.dataIda, origem: bilhete.origem, destino: bilhete.destino, companhia: 'AD', voo: bilhete.numeroVoo, horaPartida: bilhete.horaPartida, horaChegada: bilhete.horaChegada }];
+        if (bilhete.dataVolta) trechos.push({ tipo: 'volta', data: bilhete.dataVolta, origem: bilhete.destino, destino: bilhete.origem, companhia: 'AD', voo: bilhete._numeroVooVolta, horaPartida: bilhete._horaPartidaVolta, horaChegada: bilhete._horaChegadaVolta });
+        bilhete.trechos = trechos;
+
+        const locChave   = localizador.toUpperCase();
+        const todas      = Storage.getReservas();
+        const jaExiste   = todas.find(r => r.localizador?.toUpperCase() === locChave && r.companhia === 'azul');
+        const jaExisteDb = this._dbReservas.find(r => r.localizador?.toUpperCase() === locChave && r.companhia === 'azul');
+        const dadosReserva = {
+            companhia: 'azul', localizador,
+            dataIda: bilhete.dataIda, dataVolta: bilhete.dataVolta,
+            origem: bilhete.origem,   destino: bilhete.destino,
+            urlReserva, _bilhete: bilhete, emitidoPor
+        };
+
+        let reservaFinal;
+        const idDb = jaExisteDb?.id || (jaExiste?._savedInDb ? jaExiste.id : null);
+        if (jaExiste || jaExisteDb) {
+            if (jaExiste) { Storage.updateReserva(jaExiste.id, dadosReserva); reservaFinal = { ...jaExiste, ...dadosReserva }; }
+            if (jaExisteDb) {
+                const dbIdx = this._dbReservas.findIndex(r => r.id === jaExisteDb.id);
+                if (dbIdx !== -1) this._dbReservas[dbIdx] = { ...this._dbReservas[dbIdx], ...dadosReserva, _bilhete: bilhete, _savedInDb: true };
+            }
+            if (idDb) {
+                fetch(`/api/reservas/${idDb}`, {
+                    method: 'PUT', headers: this._authHeaders(),
+                    body: JSON.stringify({ dataIda: bilhete.dataIda || null, dataVolta: bilhete.dataVolta || null, origem: bilhete.origem, destino: bilhete.destino, urlReserva, bilhete: JSON.stringify(bilhete) })
+                }).catch(e => console.warn('[Azul] Erro ao atualizar:', e.message));
+            }
+            App.showToast('Reserva Azul atualizada!', 'success');
+        } else {
+            reservaFinal = Storage.addReserva({ ...dadosReserva, clienteId: '', fornecedorId: '', valorVenda: 0, custos: 0, saldo: 0, dataEmissao: new Date().toISOString(), _savedInDb: false });
+            this._registrarAlerta(reservaFinal);
+            App.showToast('Reserva Azul adicionada!', 'success');
+        }
+        this.carregarGrid();
+    },
+
+    _salvarComplementoAzul() {
+        const modal       = document.getElementById('modalComplementoAzul');
+        const localizador = modal.dataset.localizador;
+        const origem      = modal.dataset.origem;
+        const urlReserva  = modal.dataset.urlReserva;
+        const emitidoPor  = modal.dataset.emitidoPor || '';
+
+        const destino  = document.getElementById('azulModalDestino').value;
+        const dataIda  = document.getElementById('azulModalDataIda').value;
+        const dataVolta = document.getElementById('azulModalDataVolta').value;
+
+        if (!destino || !dataIda) {
+            App.showToast('Preencha Destino e Data de Ida', 'error');
+            return;
+        }
+
+        bootstrap.Modal.getInstance(modal)?.hide();
+
+        const bilhete = {
+            companhia: 'AD', codigoReserva: localizador,
+            passageiroNome: '', origem, destino, dataIda, dataVolta: dataVolta || '',
+            horaPartida: '', horaChegada: '', _horaPartidaVolta: '', _horaChegadaVolta: '',
+            numeroVoo: '', _numeroVooVolta: '', cabine: '', bagagem: '',
+            dataEmissao: new Date().toISOString(),
+            trechos: [{ tipo: 'ida', data: dataIda, origem, destino, companhia: 'AD', voo: '', horaPartida: '', horaChegada: '' }]
+        };
+        if (dataVolta) bilhete.trechos.push({ tipo: 'volta', data: dataVolta, origem: destino, destino: origem, companhia: 'AD', voo: '', horaPartida: '', horaChegada: '' });
+
+        const locChave   = localizador.toUpperCase();
+        const todas      = Storage.getReservas();
+        const jaExiste   = todas.find(r => r.localizador?.toUpperCase() === locChave && r.companhia === 'azul');
+        const jaExisteDb = this._dbReservas.find(r => r.localizador?.toUpperCase() === locChave && r.companhia === 'azul');
+        const dadosReserva = {
+            companhia: 'azul', localizador, dataIda, dataVolta: dataVolta || '',
+            origem, destino, urlReserva, _bilhete: bilhete, emitidoPor
+        };
+
+        let reservaFinal;
+        const idDb = jaExisteDb?.id || (jaExiste?._savedInDb ? jaExiste.id : null);
+        if (jaExiste || jaExisteDb) {
+            if (jaExiste) { Storage.updateReserva(jaExiste.id, dadosReserva); reservaFinal = { ...jaExiste, ...dadosReserva }; }
+            if (jaExisteDb) {
+                const dbIdx = this._dbReservas.findIndex(r => r.id === jaExisteDb.id);
+                if (dbIdx !== -1) this._dbReservas[dbIdx] = { ...this._dbReservas[dbIdx], ...dadosReserva, _bilhete: bilhete, _savedInDb: true };
+            }
+            if (idDb) {
+                fetch(`/api/reservas/${idDb}`, {
+                    method: 'PUT', headers: this._authHeaders(),
+                    body: JSON.stringify({ dataIda, dataVolta: dataVolta || null, origem, destino, urlReserva, bilhete: JSON.stringify(bilhete) })
+                }).catch(e => console.warn('[Azul] Erro ao atualizar:', e.message));
+            }
+            App.showToast('Reserva Azul atualizada!', 'success');
+        } else {
+            reservaFinal = Storage.addReserva({ ...dadosReserva, clienteId: '', fornecedorId: '', valorVenda: 0, custos: 0, saldo: 0, dataEmissao: new Date().toISOString(), _savedInDb: false });
+            this._registrarAlerta(reservaFinal);
+            App.showToast('Reserva Azul salva!', 'success');
+        }
         this.carregarGrid();
     },
 

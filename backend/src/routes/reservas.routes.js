@@ -2046,6 +2046,56 @@ router.use(authMiddleware);
 
 /**
 // Debug: retorna o último arquivo de diagnóstico Azul gravado pelo extrairBilheteAzul
+/**
+ * POST /api/reservas/azul-lookup
+ * Tenta buscar dados de uma reserva Azul diretamente (sem Puppeteer).
+ * Retorna { success, data } se OK, ou { success: false, blocked: true } se Akamai bloquear.
+ */
+router.post('/azul-lookup', authMiddleware, async (req, res) => {
+    const { pnr, origin } = req.body;
+    if (!pnr || !origin) return res.status(400).json({ success: false, message: 'pnr e origin são obrigatórios' });
+
+    const endpoints = [
+        `https://b2c-api.voeazul.com.br/booking/v5/bookings/${pnr}?origin=${origin}`,
+        `https://b2c-api.voeazul.com.br/booking/v4/bookings/${pnr}?origin=${origin}`,
+        `https://b2c-api.voeazul.com.br/api/bookings/${pnr}?origin=${origin}`,
+    ];
+
+    const headers = {
+        'Accept': 'application/json, text/plain, */*',
+        'Accept-Language': 'pt-BR,pt;q=0.9,en-US;q=0.8,en;q=0.7',
+        'Accept-Encoding': 'gzip, deflate, br',
+        'Origin': 'https://www.voeazul.com.br',
+        'Referer': `https://www.voeazul.com.br/br/pt/home/minhas-viagens/confirmacao?pnr=${pnr}&origin=${origin}`,
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+        'sec-ch-ua': '"Chromium";v="124","Google Chrome";v="124","Not-A.Brand";v="99"',
+        'sec-ch-ua-mobile': '?0',
+        'sec-ch-ua-platform': '"Windows"',
+        'sec-fetch-dest': 'empty',
+        'sec-fetch-mode': 'cors',
+        'sec-fetch-site': 'same-site',
+    };
+
+    for (const ep of endpoints) {
+        try {
+            const r = await fetch(ep, { headers });
+            console.log(`[AzulLookup] ${ep} → HTTP ${r.status}`);
+            if (r.ok) {
+                const json = await r.json();
+                if (json && Object.keys(json).length > 2) {
+                    // Extrai dados do booking
+                    const bilheteData = extrairBilheteAzul([{ url: ep, data: json }], '', '');
+                    return res.json({ success: true, bilheteData, raw: json });
+                }
+            }
+        } catch (e) {
+            console.warn(`[AzulLookup] Erro em ${ep}:`, e.message);
+        }
+    }
+
+    res.json({ success: false, blocked: true, message: 'API Azul bloqueada neste servidor (Akamai). Preencha os dados manualmente.' });
+});
+
 router.get('/debug-azul', authMiddleware, (req, res) => {
     try {
         const logFile = path.join(__dirname, '../../../backend/data/azul_debug.json');
