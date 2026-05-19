@@ -1554,9 +1554,15 @@ const ReservasModule = {
         const clientes     = this._clientes;
         const fornecedores = this._fornecedores;
 
-        // Mescla: banco de dados + localStorage (não salvos e sem duplicata de ID)
-        const dbIds = new Set(this._dbReservas.map(r => r.id));
-        const localReservas = Storage.getReservas().filter(r => !r._savedInDb && !dbIds.has(r.id));
+        // Mescla: banco de dados + localStorage (exclui duplicatas por ID e por localizador+cia)
+        const dbIds  = new Set(this._dbReservas.map(r => r.id));
+        const dbKeys = new Set(this._dbReservas.map(r => `${r.companhia}|${(r.localizador||'').toUpperCase()}`));
+        const localReservas = Storage.getReservas().filter(r => {
+            if (r._savedInDb) return false;
+            if (dbIds.has(r.id)) return false;
+            if (r.localizador && dbKeys.has(`${r.companhia}|${r.localizador.toUpperCase()}`)) return false;
+            return true;
+        });
         let reservas = [...this._dbReservas, ...localReservas];
 
         if (reservas.length === 0) {
