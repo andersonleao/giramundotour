@@ -1144,6 +1144,15 @@ const ReservasModule = {
         if (dbR) {
             // Atualiza o objeto local imediatamente
             dbR[campo] = valor;
+            // Sincroniza o nome exibido na grid ao trocar cliente/fornecedor
+            if (campo === 'clienteId') {
+                const c = this._clientes.find(c => String(c.id) === String(valor));
+                dbR.clienteNome = c ? c.nome : '';
+            }
+            if (campo === 'fornecedorId') {
+                const f = this._fornecedores.find(f => String(f.id) === String(valor));
+                dbR.fornecedorNome = f ? f.nome : '';
+            }
             if (campo === 'valorVenda' || campo === 'custos') {
                 const venda  = parseFloat(campo === 'valorVenda' ? valor : dbR.valorVenda) || 0;
                 const custos = parseFloat(campo === 'custos'     ? valor : dbR.custos)     || 0;
@@ -1545,8 +1554,9 @@ const ReservasModule = {
         const clientes     = this._clientes;
         const fornecedores = this._fornecedores;
 
-        // Mescla: banco de dados + localStorage (não salvos)
-        const localReservas = Storage.getReservas().filter(r => !r._savedInDb);
+        // Mescla: banco de dados + localStorage (não salvos e sem duplicata de ID)
+        const dbIds = new Set(this._dbReservas.map(r => r.id));
+        const localReservas = Storage.getReservas().filter(r => !r._savedInDb && !dbIds.has(r.id));
         let reservas = [...this._dbReservas, ...localReservas];
 
         if (reservas.length === 0) {
