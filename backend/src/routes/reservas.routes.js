@@ -2164,6 +2164,7 @@ router.post('/azul-lookup', authMiddleware, async (req, res) => {
  * POST /api/reservas/gol-lookup
  * Usa Puppeteer para navegar na página GOL e capturar a resposta do pnrBnpl.
  * GOL usa x-aat (anti-abuse token) gerado pelo oat.js — só obtível via browser real.
+ * Fallback: page.evaluate() chama pnrBnpl de dentro do browser (com cookies/auth já configurados).
  */
 router.post('/gol-lookup', authMiddleware, async (req, res) => {
     const { pnr, origin, lastName } = req.body;
@@ -2175,38 +2176,80 @@ router.post('/gol-lookup', authMiddleware, async (req, res) => {
         browser = await puppeteerExtra.launch({
             headless: true,
             executablePath: chromePath,
-            args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage',
-                   '--disable-gpu', '--single-process']
+            args: [
+                '--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage',
+                '--disable-gpu', '--no-zygote',
+                '--disable-blink-features=AutomationControlled',
+                '--window-size=1366,768'
+            ]
         });
         const page = await browser.newPage();
         await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36');
         await page.setViewport({ width: 1366, height: 768 });
+        await page.setExtraHTTPHeaders({ 'Accept-Language': 'pt-BR,pt;q=0.9,en-US;q=0.8' });
 
         let pnrData = null;
         page.on('response', async resp => {
             const url = resp.url();
             if (!url.includes('pnrBnpl') && !(url.includes('booking-api') && url.includes(pnr))) return;
             try {
-                // .buffer() é mais confiável que .text() no Puppeteer para respostas gzip/brotli
                 const buf = await resp.buffer();
                 const txt = buf.toString('utf8');
                 if (!txt || txt.length < 20) return;
                 const json = JSON.parse(txt);
                 if (json?.success && json?.response?.pnrRetrieveResponse) {
                     pnrData = json;
-                    console.log('[GolLookup] pnrBnpl capturado:', url.substring(0, 100));
+                    console.log('[GolLookup] pnrBnpl capturado via intercept');
                 }
             } catch (_) {}
         });
 
-        const url = `https://b2c.voegol.com.br/minhas-viagens/encontrar-viagem?codigoReserva=${pnr}&origem=${origin}${lastName ? '&sobrenome=' + encodeURIComponent(lastName.toLowerCase()) : ''}`;
-        console.log('[GolLookup] Navegando:', url);
-        await page.goto(url, { waitUntil: 'networkidle2', timeout: 45000 }).catch(e => console.warn('[GolLookup] Nav:', e.message));
-        await new Promise(r => setTimeout(r, 5000));
+        const golUrl = `https://b2c.voegol.com.br/minhas-viagens/encontrar-viagem?codigoReserva=${pnr}&origem=${origin}${lastName ? '&sobrenome=' + encodeURIComponent(lastName.toLowerCase()) : ''}`;
+        console.log('[GolLookup] Navegando:', golUrl);
+        await page.goto(golUrl, { waitUntil: 'networkidle2', timeout: 50000 }).catch(e => console.warn('[GolLookup] Nav:', e.message));
+
+        // Diagnóstico: título e URL atual
+        const pageTitle = await page.title().catch(() => '');
+        const pageUrl   = page.url();
+        console.log('[GolLookup] Título:', pageTitle, '| URL:', pageUrl.substring(0, 80));
+
+        const isCfChallenge = /just a moment|checking your|attention required|cloudflare/i.test(pageTitle);
+        if (isCfChallenge) console.warn('[GolLookup] ⚠ Cloudflare challenge detectado!');
+
+        // Aguarda mais tempo para respostas async
+        await new Promise(r => setTimeout(r, 8000));
+
+        // Fallback: chama pnrBnpl de dentro do contexto do browser (já tem cookies/auth)
+        if (!pnrData && !isCfChallenge) {
+            console.log('[GolLookup] Intercept sem dados — tentando page.evaluate()...');
+            try {
+                const evalResult = await page.evaluate(async (p, o, l) => {
+                    const url = `https://booking-api.voegol.com.br/api/pnrBnpl/pnr-bnpl-validation-v2?context=b2c&flow=consult&pnr=${p}&origin=${o}${l ? '&lastName=' + encodeURIComponent(l) : ''}`;
+                    try {
+                        const resp = await fetch(url, {
+                            credentials: 'include',
+                            headers: { 'Accept': 'application/json', 'X-Requested-With': 'XMLHttpRequest',
+                                       'Origin': location.origin, 'Referer': location.href }
+                        });
+                        if (!resp.ok) return null;
+                        return await resp.json();
+                    } catch (e) { return null; }
+                }, pnr, origin, lastName || '');
+                if (evalResult?.success && evalResult?.response?.pnrRetrieveResponse) {
+                    pnrData = evalResult;
+                    console.log('[GolLookup] pnrBnpl capturado via page.evaluate()');
+                } else {
+                    console.warn('[GolLookup] page.evaluate() não retornou dados válidos');
+                }
+            } catch (evalErr) {
+                console.warn('[GolLookup] page.evaluate() erro:', evalErr.message);
+            }
+        }
 
         if (!pnrData) {
-            console.warn('[GolLookup] Sem pnrBnpl — Cloudflare ou timeout');
-            return res.json({ success: false, blocked: true, message: 'GOL não retornou dados — Cloudflare bloqueou ou timeout.' });
+            const motivo = isCfChallenge ? 'Cloudflare bloqueou' : 'timeout ou dados não encontrados';
+            console.warn(`[GolLookup] Falhou: ${motivo}`);
+            return res.json({ success: false, blocked: true, message: `GOL: ${motivo}. Verifique localizador/origem/sobrenome.` });
         }
 
         const pnrObj = pnrData.response.pnrRetrieveResponse.pnr || {};
@@ -2250,6 +2293,50 @@ router.post('/gol-lookup', authMiddleware, async (req, res) => {
         return res.json({ success: false, blocked: true, message: 'Erro no lookup GOL: ' + err.message });
     } finally {
         if (browser) await browser.close().catch(() => {});
+    }
+});
+
+/**
+ * GET /api/reservas/debug-gol
+ * Diagnóstico: verifica se GOL é acessível via Puppeteer neste servidor.
+ */
+router.get('/debug-gol', authMiddleware, async (req, res) => {
+    let browser;
+    try {
+        const chromePath = process.env.PUPPETEER_EXECUTABLE_PATH || undefined;
+        browser = await puppeteerExtra.launch({
+            headless: true, executablePath: chromePath,
+            args: ['--no-sandbox','--disable-setuid-sandbox','--disable-dev-shm-usage','--no-zygote']
+        });
+        const page = await browser.newPage();
+        await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36');
+
+        const golUrls = [];
+        page.on('response', async resp => {
+            const u = resp.url();
+            if (u.includes('voegol.com.br') || u.includes('gol-auth-api') || u.includes('booking-api') || u.includes('pnrBnpl')) {
+                golUrls.push({ url: u.substring(0,100), status: resp.status() });
+            }
+        });
+
+        await page.goto('https://b2c.voegol.com.br/minhas-viagens/encontrar-viagem?codigoReserva=TEST&origem=GRU&sobrenome=test', { waitUntil: 'networkidle2', timeout: 30000 }).catch(() => {});
+        await new Promise(r => setTimeout(r, 3000));
+
+        const title    = await page.title().catch(() => '');
+        const bodySnip = await page.evaluate(() => document.body?.innerText?.substring(0, 300) || '').catch(() => '');
+        await browser.close();
+
+        res.json({
+            success: true,
+            pageTitle: title,
+            cloudflareDetectado: /just a moment|checking your|attention required/i.test(title),
+            bodySnippet: bodySnip.substring(0, 200),
+            urlsCapturadas: golUrls.slice(0, 15),
+            chromePath: chromePath || 'default'
+        });
+    } catch (err) {
+        if (browser) await browser.close().catch(() => {});
+        res.json({ success: false, error: err.message });
     }
 });
 
