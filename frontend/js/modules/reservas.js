@@ -174,15 +174,16 @@ const ReservasModule = {
                         </div>
 
                         <!-- VoeGOL: dados manuais (sem Puppeteer) -->
+                        <!-- GOL: localizador + sobrenome + origem — busca automática via Puppeteer -->
                         <div id="camposGol" style="display:none;">
-                            <div class="row g-3">
+                            <div class="row g-3 align-items-end">
                                 <div class="col-md-3">
                                     <label class="form-label">Localizador <span class="text-danger">*</span></label>
                                     <input type="text" class="form-control text-uppercase" id="golLocalizador"
-                                           placeholder="Ex: VR6C3H" maxlength="10">
+                                           placeholder="Ex: SEOBQV" maxlength="10">
                                 </div>
                                 <div class="col-md-3">
-                                    <label class="form-label">Sobrenome</label>
+                                    <label class="form-label">Sobrenome <span class="text-danger">*</span></label>
                                     <input type="text" class="form-control text-uppercase" id="golSobrenome"
                                            placeholder="Ex: SILVA">
                                 </div>
@@ -193,26 +194,10 @@ const ReservasModule = {
                                         ${optsAeroportos}
                                     </select>
                                 </div>
-                                <div class="col-md-3">
-                                    <label class="form-label">Destino <span class="text-danger">*</span></label>
-                                    <select class="form-select" id="golDestino">
-                                        <option value="">Selecione...</option>
-                                        ${optsAeroportos}
-                                    </select>
-                                </div>
-                            </div>
-                            <div class="row g-3 mt-1 align-items-end">
-                                <div class="col-md-3">
-                                    <label class="form-label">Data de Ida <span class="text-danger">*</span></label>
-                                    <input type="date" class="form-control" id="golDataIda">
-                                </div>
-                                <div class="col-md-3">
-                                    <label class="form-label">Data de Volta</label>
-                                    <input type="date" class="form-control" id="golDataVolta">
-                                </div>
                                 <div class="col-md-3 d-flex align-items-end">
-                                    <button class="btn btn-success w-100" onclick="ReservasModule.adicionarReserva()">
-                                        <i class="bi bi-plus-circle"></i> Adicionar
+                                    <button class="btn btn-success w-100" id="btnGolImportar"
+                                            onclick="ReservasModule.adicionarReserva()">
+                                        <i class="bi bi-cloud-download"></i> Importar
                                     </button>
                                 </div>
                             </div>
@@ -226,6 +211,48 @@ const ReservasModule = {
                                     <button class="btn btn-outline-success w-100" onclick="ReservasModule.importarPdfGol()">
                                         <i class="bi bi-file-earmark-arrow-up"></i> Importar PDF
                                     </button>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Modal complemento GOL (fallback quando Cloudflare bloqueia) -->
+                        <div class="modal fade" id="modalComplementoGol" tabindex="-1" aria-hidden="true">
+                            <div class="modal-dialog modal-dialog-centered">
+                                <div class="modal-content">
+                                    <div class="modal-header bg-danger text-white py-2">
+                                        <h6 class="modal-title mb-0"><i class="bi bi-airplane"></i> Complementar dados — GOL</h6>
+                                    </div>
+                                    <div class="modal-body">
+                                        <p class="text-muted small mb-3">
+                                            Localizador: <strong id="golModalLoc"></strong> &nbsp;|&nbsp;
+                                            Sobrenome: <strong id="golModalSob"></strong> &nbsp;|&nbsp;
+                                            Origem: <strong id="golModalOri"></strong>
+                                        </p>
+                                        <div class="row g-3">
+                                            <div class="col-md-12">
+                                                <label class="form-label fw-semibold">Destino <span class="text-danger">*</span></label>
+                                                <select class="form-select" id="golModalDestino">
+                                                    <option value="">Selecione...</option>
+                                                    ${optsAeroportos}
+                                                </select>
+                                            </div>
+                                            <div class="col-md-6">
+                                                <label class="form-label fw-semibold">Data de Ida <span class="text-danger">*</span></label>
+                                                <input type="date" class="form-control" id="golModalDataIda">
+                                            </div>
+                                            <div class="col-md-6">
+                                                <label class="form-label fw-semibold">Data de Volta</label>
+                                                <input type="date" class="form-control" id="golModalDataVolta">
+                                            </div>
+                                        </div>
+                                    </div>
+                                    <div class="modal-footer py-2">
+                                        <button type="button" class="btn btn-secondary btn-sm" data-bs-dismiss="modal">Cancelar</button>
+                                        <button type="button" class="btn btn-danger btn-sm"
+                                                onclick="ReservasModule._salvarComplementoGol()">
+                                            <i class="bi bi-check-circle"></i> Salvar reserva
+                                        </button>
+                                    </div>
                                 </div>
                             </div>
                         </div>
@@ -531,69 +558,47 @@ const ReservasModule = {
 
         } else if (cia === 'gol') {
             const localizador = document.getElementById('golLocalizador').value.trim().toUpperCase();
-            const sobrenome   = document.getElementById('golSobrenome').value.trim();
+            const sobrenome   = document.getElementById('golSobrenome').value.trim().toUpperCase();
             const origem      = document.getElementById('golOrigem').value;
-            const destino     = document.getElementById('golDestino').value;
-            const dataIda     = document.getElementById('golDataIda').value;
-            const dataVolta   = document.getElementById('golDataVolta').value;
-
-            if (!localizador || !origem || !destino || !dataIda) {
-                App.showToast('Preencha Localizador, Origem, Destino e Data de Ida', 'error');
+            if (!localizador || !sobrenome || !origem) {
+                App.showToast('Preencha Localizador, Sobrenome e Origem', 'error');
                 return;
             }
+            const btnGol = document.getElementById('btnGolImportar');
+            if (btnGol) { btnGol.disabled = true; btnGol.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span> Buscando...'; }
 
-            // Caminho direto: sem Puppeteer (site GOL bloqueado por Cloudflare no servidor)
-            const urlReserva = `https://b2c.voegol.com.br/minhas-viagens/encontrar-viagem?codigoReserva=${localizador}&origem=${origem}${sobrenome ? '&sobrenome=' + encodeURIComponent(sobrenome.toLowerCase()) : ''}`;
-            const trechos = [{ tipo: 'ida', data: dataIda, origem, destino, companhia: 'G3', voo: '', horaPartida: '', horaChegada: '' }];
-            if (dataVolta) trechos.push({ tipo: 'volta', data: dataVolta, origem: destino, destino: origem, companhia: 'G3', voo: '', horaPartida: '', horaChegada: '' });
-            const bilhete = {
-                companhia: 'G3', codigoReserva: localizador, passageiroNome: sobrenome,
-                origem, destino, dataIda, dataVolta: dataVolta || '',
-                horaPartida: '', horaChegada: '', _horaPartidaVolta: '', _horaChegadaVolta: '',
-                numeroVoo: '', _numeroVooVolta: '', cabine: '', bagagem: '',
-                dataEmissao: new Date().toISOString(), trechos
-            };
-            const locChave   = localizador.toUpperCase();
-            const todas      = Storage.getReservas();
-            const jaExiste   = todas.find(r => r.localizador?.toUpperCase() === locChave && r.companhia === 'gol');
-            const jaExisteDb = this._dbReservas.find(r => r.localizador?.toUpperCase() === locChave && r.companhia === 'gol');
-            const dadosReserva = {
-                companhia: 'gol', localizador, dataIda, dataVolta: dataVolta || '',
-                origem, destino, urlReserva, _bilhete: bilhete,
-                emitidoPor: document.getElementById('reservaEmitidoPor')?.value || ''
-            };
-            let reservaFinal;
-            const idDbGol = jaExisteDb?.id || (jaExiste?._savedInDb ? jaExiste.id : null);
-            if (jaExiste || jaExisteDb) {
-                if (jaExiste) {
-                    Storage.updateReserva(jaExiste.id, dadosReserva);
-                    reservaFinal = { ...jaExiste, ...dadosReserva };
-                }
-                // Atualiza array _dbReservas em memória para que carregarGrid reflita os novos dados
-                if (jaExisteDb) {
-                    const dbIdx = this._dbReservas.findIndex(r => r.id === jaExisteDb.id);
-                    if (dbIdx !== -1) {
-                        this._dbReservas[dbIdx] = { ...this._dbReservas[dbIdx], ...dadosReserva, _bilhete: bilhete, _savedInDb: true };
-                    }
-                }
-                if (idDbGol) {
-                    fetch(`/api/reservas/${idDbGol}`, {
-                        method: 'PUT',
-                        headers: this._authHeaders(),
-                        body: JSON.stringify({ dataIda, dataVolta: dataVolta || null, origem, destino, urlReserva, bilhete: JSON.stringify(bilhete) })
-                    }).catch(e => console.warn('[ReservasModule] Erro ao atualizar GOL:', e.message));
-                }
-                App.showToast('Reserva GOL atualizada!', 'success');
-            } else {
-                reservaFinal = Storage.addReserva({
-                    ...dadosReserva,
-                    clienteId: '', fornecedorId: '', valorVenda: 0, custos: 0, saldo: 0,
-                    dataEmissao: new Date().toISOString(), _savedInDb: false
+            let bilheteData = null;
+            try {
+                const resp = await fetch('/api/reservas/gol-lookup', {
+                    method: 'POST', headers: this._authHeaders(),
+                    body: JSON.stringify({ pnr: localizador, origin: origem, lastName: sobrenome })
                 });
-                this._registrarAlerta(reservaFinal);
-                App.showToast('Reserva GOL adicionada!', 'success');
+                const result = await resp.json();
+                if (result.success && result.bilheteData?.ida?.data) bilheteData = result.bilheteData;
+            } catch (e) { console.warn('[GOL] Lookup falhou:', e.message); }
+
+            if (btnGol) { btnGol.disabled = false; btnGol.innerHTML = '<i class="bi bi-cloud-download"></i> Importar'; }
+
+            const urlReserva  = `https://b2c.voegol.com.br/minhas-viagens/encontrar-viagem?codigoReserva=${localizador}&origem=${origem}&sobrenome=${encodeURIComponent(sobrenome.toLowerCase())}`;
+            const emitidoPor  = document.getElementById('reservaEmitidoPor')?.value || '';
+
+            if (bilheteData) {
+                this._salvarReservaGol(localizador, sobrenome, origem, urlReserva, emitidoPor, bilheteData);
+            } else {
+                document.getElementById('golModalLoc').textContent = localizador;
+                document.getElementById('golModalSob').textContent = sobrenome;
+                document.getElementById('golModalOri').textContent = origem;
+                document.getElementById('golModalDestino').value  = '';
+                document.getElementById('golModalDataIda').value  = '';
+                document.getElementById('golModalDataVolta').value = '';
+                const modal = document.getElementById('modalComplementoGol');
+                modal.dataset.localizador = localizador;
+                modal.dataset.sobrenome   = sobrenome;
+                modal.dataset.origem      = origem;
+                modal.dataset.urlReserva  = urlReserva;
+                modal.dataset.emitidoPor  = emitidoPor;
+                new bootstrap.Modal(modal).show();
             }
-            this.carregarGrid();
             return;
 
         } else if (cia === 'latam') {
@@ -1278,6 +1283,85 @@ const ReservasModule = {
             App.showToast('Reserva Azul adicionada!', 'success');
         }
         this.carregarGrid();
+    },
+
+    _salvarReservaGol(localizador, sobrenome, origem, urlReserva, emitidoPor, bilheteData) {
+        const ida   = bilheteData?.ida  || {};
+        const volta = bilheteData?.volta || {};
+        const bilhete = {
+            companhia: 'G3', codigoReserva: localizador,
+            passageiroNome: bilheteData?.passageiroNome || sobrenome,
+            origem:   ida.origem  || origem,
+            destino:  ida.destino || '',
+            dataIda:  ida.data    || '',
+            dataVolta: volta.data || '',
+            horaPartida:       ida.horaPartida   || '',
+            horaChegada:       ida.horaChegada   || '',
+            _horaPartidaVolta: volta.horaPartida || '',
+            _horaChegadaVolta: volta.horaChegada || '',
+            numeroVoo:       ida.voo   || '',
+            _numeroVooVolta: volta.voo || '',
+            cabine: '', bagagem: '', dataEmissao: new Date().toISOString(), trechos: []
+        };
+        const trechos = [{ tipo: 'ida', data: bilhete.dataIda, origem: bilhete.origem, destino: bilhete.destino, companhia: 'G3', voo: bilhete.numeroVoo, horaPartida: bilhete.horaPartida, horaChegada: bilhete.horaChegada }];
+        if (bilhete.dataVolta) trechos.push({ tipo: 'volta', data: bilhete.dataVolta, origem: bilhete.destino, destino: bilhete.origem, companhia: 'G3', voo: bilhete._numeroVooVolta, horaPartida: bilhete._horaPartidaVolta, horaChegada: bilhete._horaChegadaVolta });
+        bilhete.trechos = trechos;
+
+        const locChave   = localizador.toUpperCase();
+        const todas      = Storage.getReservas();
+        const jaExiste   = todas.find(r => r.localizador?.toUpperCase() === locChave && r.companhia === 'gol');
+        const jaExisteDb = this._dbReservas.find(r => r.localizador?.toUpperCase() === locChave && r.companhia === 'gol');
+        const dadosReserva = {
+            companhia: 'gol', localizador,
+            dataIda: bilhete.dataIda, dataVolta: bilhete.dataVolta,
+            origem: bilhete.origem, destino: bilhete.destino,
+            urlReserva, _bilhete: bilhete, emitidoPor
+        };
+        let reservaFinal;
+        const idDb = jaExisteDb?.id || (jaExiste?._savedInDb ? jaExiste.id : null);
+        if (jaExiste || jaExisteDb) {
+            if (jaExiste) { Storage.updateReserva(jaExiste.id, dadosReserva); reservaFinal = { ...jaExiste, ...dadosReserva }; }
+            if (jaExisteDb) {
+                const dbIdx = this._dbReservas.findIndex(r => r.id === jaExisteDb.id);
+                if (dbIdx !== -1) this._dbReservas[dbIdx] = { ...this._dbReservas[dbIdx], ...dadosReserva, _bilhete: bilhete, _savedInDb: true };
+            }
+            if (idDb) {
+                fetch(`/api/reservas/${idDb}`, {
+                    method: 'PUT', headers: this._authHeaders(),
+                    body: JSON.stringify({ dataIda: bilhete.dataIda || null, dataVolta: bilhete.dataVolta || null, origem: bilhete.origem, destino: bilhete.destino, urlReserva, bilhete: JSON.stringify(bilhete) })
+                }).catch(e => console.warn('[GOL] Erro ao atualizar:', e.message));
+            }
+            App.showToast('Reserva GOL atualizada!', 'success');
+        } else {
+            reservaFinal = Storage.addReserva({ ...dadosReserva, clienteId: '', fornecedorId: '', valorVenda: 0, custos: 0, saldo: 0, dataEmissao: new Date().toISOString(), _savedInDb: false });
+            this._registrarAlerta(reservaFinal);
+            App.showToast('Reserva GOL adicionada!', 'success');
+        }
+        this.carregarGrid();
+    },
+
+    _salvarComplementoGol() {
+        const modal       = document.getElementById('modalComplementoGol');
+        const localizador = modal.dataset.localizador;
+        const sobrenome   = modal.dataset.sobrenome;
+        const origem      = modal.dataset.origem;
+        const urlReserva  = modal.dataset.urlReserva;
+        const emitidoPor  = modal.dataset.emitidoPor || '';
+
+        const destino   = document.getElementById('golModalDestino').value;
+        const dataIda   = document.getElementById('golModalDataIda').value;
+        const dataVolta = document.getElementById('golModalDataVolta').value;
+
+        if (!destino || !dataIda) { App.showToast('Preencha Destino e Data de Ida', 'error'); return; }
+        bootstrap.Modal.getInstance(modal)?.hide();
+
+        const bilheteData = {
+            passageiroNome: sobrenome,
+            tripType: dataVolta ? 'Roundtrip' : 'OneWay',
+            ida:   { origem, destino, data: dataIda, horaPartida: '', horaChegada: '', voo: '' },
+            volta: dataVolta ? { origem: destino, destino: origem, data: dataVolta, horaPartida: '', horaChegada: '', voo: '' } : null
+        };
+        this._salvarReservaGol(localizador, sobrenome, origem, urlReserva, emitidoPor, bilheteData);
     },
 
     _salvarComplementoAzul() {

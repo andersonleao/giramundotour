@@ -2160,6 +2160,97 @@ router.post('/azul-lookup', authMiddleware, async (req, res) => {
     }
 });
 
+/**
+ * POST /api/reservas/gol-lookup
+ * Usa Puppeteer para navegar na página GOL e capturar a resposta do pnrBnpl.
+ * GOL usa x-aat (anti-abuse token) gerado pelo oat.js — só obtível via browser real.
+ */
+router.post('/gol-lookup', authMiddleware, async (req, res) => {
+    const { pnr, origin, lastName } = req.body;
+    if (!pnr || !origin) return res.status(400).json({ success: false, message: 'pnr e origin são obrigatórios' });
+
+    let browser;
+    try {
+        const chromePath = process.env.PUPPETEER_EXECUTABLE_PATH || undefined;
+        browser = await puppeteerExtra.launch({
+            headless: true,
+            executablePath: chromePath,
+            args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage',
+                   '--disable-gpu', '--single-process']
+        });
+        const page = await browser.newPage();
+        await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36');
+        await page.setViewport({ width: 1366, height: 768 });
+
+        let pnrData = null;
+        page.on('response', async resp => {
+            const url = resp.url();
+            if (!url.includes('pnrBnpl') && !(url.includes('booking-api') && url.includes(pnr))) return;
+            try {
+                const txt = await resp.text();
+                if (!txt || txt.length < 20) return;
+                const json = JSON.parse(txt);
+                if (json?.success && json?.response?.pnrRetrieveResponse) {
+                    pnrData = json;
+                    console.log('[GolLookup] pnrBnpl capturado:', url.substring(0, 100));
+                }
+            } catch (_) {}
+        });
+
+        const url = `https://b2c.voegol.com.br/minhas-viagens/encontrar-viagem?codigoReserva=${pnr}&origem=${origin}${lastName ? '&sobrenome=' + encodeURIComponent(lastName.toLowerCase()) : ''}`;
+        console.log('[GolLookup] Navegando:', url);
+        await page.goto(url, { waitUntil: 'networkidle2', timeout: 45000 }).catch(e => console.warn('[GolLookup] Nav:', e.message));
+        await new Promise(r => setTimeout(r, 5000));
+
+        if (!pnrData) {
+            console.warn('[GolLookup] Sem pnrBnpl — Cloudflare ou timeout');
+            return res.json({ success: false, blocked: true, message: 'GOL não retornou dados — Cloudflare bloqueou ou timeout.' });
+        }
+
+        const pnrObj = pnrData.response.pnrRetrieveResponse.pnr || {};
+        const parts  = pnrObj?.itinerary?.itineraryParts || [];
+
+        function toDataG(dt) { return dt ? String(dt).substring(0, 10) : ''; }
+        function toHoraG(dt) { return dt ? String(dt).substring(11, 16) : ''; }
+
+        const seg0 = parts[0]?.segments?.[0] || {};
+        const lastPart = parts.length > 1 ? parts[parts.length - 1] : null;
+        const seg1 = lastPart?.segments?.[0] || null;
+
+        const ida = {
+            origem:      seg0.origin      || origin,
+            destino:     seg0.destination || '',
+            data:        toDataG(seg0.departure),
+            horaPartida: toHoraG(seg0.departure),
+            horaChegada: toHoraG(seg0.arrival),
+            voo:         `G3 ${seg0.flight?.flightNumber || ''}`.trim()
+        };
+        const volta = seg1 ? {
+            origem:      seg1.origin      || '',
+            destino:     seg1.destination || '',
+            data:        toDataG(seg1.departure),
+            horaPartida: toHoraG(seg1.departure),
+            horaChegada: toHoraG(seg1.arrival),
+            voo:         `G3 ${seg1.flight?.flightNumber || ''}`.trim()
+        } : null;
+
+        const passageiro = (pnrObj?.passengers || [])[0];
+        const passageiroNome = passageiro
+            ? `${passageiro.firstName || ''} ${passageiro.lastName || ''}`.trim()
+            : (lastName || '');
+
+        const bilheteData = { passageiroNome, tripType: parts.length > 1 ? 'Roundtrip' : 'OneWay', ida, volta };
+        console.log('[GolLookup] OK:', JSON.stringify({ ida: { data: ida.data, origem: ida.origem, destino: ida.destino }, volta: volta ? { data: volta.data } : null }));
+        return res.json({ success: true, bilheteData });
+
+    } catch (err) {
+        console.error('[GolLookup] Erro:', err.message);
+        return res.json({ success: false, blocked: true, message: 'Erro no lookup GOL: ' + err.message });
+    } finally {
+        if (browser) await browser.close().catch(() => {});
+    }
+});
+
 router.get('/debug-azul', authMiddleware, (req, res) => {
     try {
         const logFile = path.join(__dirname, '../../../backend/data/azul_debug.json');
