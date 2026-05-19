@@ -2187,7 +2187,9 @@ router.post('/gol-lookup', authMiddleware, async (req, res) => {
             const url = resp.url();
             if (!url.includes('pnrBnpl') && !(url.includes('booking-api') && url.includes(pnr))) return;
             try {
-                const txt = await resp.text();
+                // .buffer() é mais confiável que .text() no Puppeteer para respostas gzip/brotli
+                const buf = await resp.buffer();
+                const txt = buf.toString('utf8');
                 if (!txt || txt.length < 20) return;
                 const json = JSON.parse(txt);
                 if (json?.success && json?.response?.pnrRetrieveResponse) {
