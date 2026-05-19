@@ -2237,6 +2237,18 @@ router.post('/', async (req, res) => {
 
         const bilheteStr = bilhete ? (typeof bilhete === 'string' ? bilhete : JSON.stringify(bilhete)) : null;
 
+        // Verifica duplicidade: se localizador+companhia já existe com ID diferente, rejeita
+        const dupParams = id ? [companhia, localizador, id] : [companhia, localizador];
+        const dupWhere  = id
+            ? `LOWER(companhia) = LOWER($1) AND UPPER(localizador) = UPPER($2) AND id != $3`
+            : `LOWER(companhia) = LOWER($1) AND UPPER(localizador) = UPPER($2)`;
+        const { rows: dupCheck } = await pool.query(
+            `SELECT id FROM reservas WHERE ${dupWhere}`, dupParams
+        );
+        if (dupCheck.length > 0) {
+            return res.status(409).json({ success: false, message: `Reserva ${localizador.toUpperCase()} (${companhia}) já está cadastrada` });
+        }
+
         let reserva;
         if (id) {
             // Upsert: tenta atualizar se existir, senão cria com o id fornecido

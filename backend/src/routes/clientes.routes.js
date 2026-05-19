@@ -108,10 +108,33 @@ router.post('/', [
         const cpfLimpo  = cpf  ? cpf.replace(/\D/g, '')  : null;
         const cnpjLimpo = cnpj ? cnpj.replace(/\D/g, '') : null;
 
+        // Validações de duplicidade
+        const { rows: nomeExiste } = await pool.query(
+            'SELECT id FROM clientes WHERE LOWER(nome) = LOWER($1)', [nome]
+        );
+        if (nomeExiste.length > 0) {
+            return res.status(400).json({ error: true, message: `Cliente "${nome}" já está cadastrado` });
+        }
+
         if (cpfLimpo) {
-            const { rows: existente } = await pool.query('SELECT id FROM clientes WHERE cpf = $1', [cpfLimpo]);
-            if (existente.length > 0) {
-                return res.status(400).json({ error: true, message: 'CPF já cadastrado' });
+            const { rows: cpfExiste } = await pool.query('SELECT id FROM clientes WHERE cpf = $1', [cpfLimpo]);
+            if (cpfExiste.length > 0) {
+                return res.status(400).json({ error: true, message: 'CPF já cadastrado para outro cliente' });
+            }
+        }
+
+        if (cnpjLimpo) {
+            const { rows: cnpjExiste } = await pool.query('SELECT id FROM clientes WHERE cnpj = $1', [cnpjLimpo]);
+            if (cnpjExiste.length > 0) {
+                return res.status(400).json({ error: true, message: 'CNPJ já cadastrado para outro cliente' });
+            }
+        }
+
+        if (email) {
+            const emailLower = email.toLowerCase();
+            const { rows: emailExiste } = await pool.query('SELECT id FROM clientes WHERE email = $1', [emailLower]);
+            if (emailExiste.length > 0) {
+                return res.status(400).json({ error: true, message: 'E-mail já cadastrado para outro cliente' });
             }
         }
 

@@ -89,6 +89,14 @@ router.post('/', [
 
         const { nome, telegram, balcao, telefone, email, contato, observacoes } = req.body;
 
+        // Validação de duplicidade pelo nome
+        const { rows: nomeExiste } = await pool.query(
+            'SELECT id FROM fornecedores WHERE LOWER(nome) = LOWER($1)', [nome]
+        );
+        if (nomeExiste.length > 0) {
+            return res.status(400).json({ error: true, message: `Fornecedor "${nome}" já está cadastrado` });
+        }
+
         const { rows } = await pool.query(
             `INSERT INTO fornecedores (id, nome, telegram, balcao, telefone, email, contato, observacoes, ativo, "createdAt", "updatedAt")
              VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, $6, $7, true, NOW(), NOW())
