@@ -2179,30 +2179,64 @@ setInterval(() => {
 async function _executarGolLookup(jobId, pnr, origin, lastName) {
     let browser;
     const t0 = Date.now();
-    console.log(`[GolLookup] === job ${jobId} INICIADO === pnr=${pnr} origin=${origin} lastName=${lastName}`);
+    const elapsed = () => Math.round((Date.now()-t0)/1000) + 's';
+    console.log(`[GolLookup] === job ${jobId} === pnr=${pnr} origin=${origin} lastName=${lastName}`);
+
+    // Hard timeout: fecha browser e marca failed após 55s (evita OOM no Render 512MB)
+    const hardTimeout = setTimeout(() => {
+        console.warn('[GolLookup] HARD TIMEOUT 55s — encerrando browser');
+        if (browser) browser.close().catch(() => {});
+        if (golJobs.get(jobId)?.status === 'processing') {
+            golJobs.set(jobId, { status: 'failed', error: 'Timeout: GOL demorou mais de 55s (possível Cloudflare ou memória insuficiente)', createdAt: Date.now() });
+        }
+    }, 55000);
+
     try {
         const chromePath = process.env.PUPPETEER_EXECUTABLE_PATH || undefined;
         console.log('[GolLookup] chromePath:', chromePath || 'default');
+
         browser = await puppeteerExtra.launch({
             headless: true,
             executablePath: chromePath,
-            args: ['--no-sandbox','--disable-setuid-sandbox','--disable-dev-shm-usage',
-                   '--disable-gpu','--no-zygote','--disable-blink-features=AutomationControlled',
-                   '--window-size=1366,768']
+            args: [
+                '--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage',
+                '--disable-gpu', '--no-zygote',
+                '--disable-blink-features=AutomationControlled',
+                '--window-size=1280,720',
+                '--memory-pressure-off',           // reduz aggressividade do GC
+                '--max_old_space_size=256',         // limita heap JS do browser
+                '--disable-extensions',
+                '--disable-background-networking',
+                '--disable-sync',
+            ]
         });
-        console.log('[GolLookup] browser OK em', Date.now()-t0, 'ms');
+        console.log('[GolLookup] browser OK', elapsed());
 
         const page = await browser.newPage();
         await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36');
-        await page.setViewport({ width: 1366, height: 768 });
+        await page.setViewport({ width: 1280, height: 720 });
         await page.setExtraHTTPHeaders({ 'Accept-Language': 'pt-BR,pt;q=0.9,en-US;q=0.8' });
+
+        // CDP: bloqueia imagens/fonts/trackers sem usar setRequestInterception
+        // (setRequestInterception interfere no resp.buffer())
+        try {
+            const cdp = await page.target().createCDPSession();
+            await cdp.send('Network.setBlockedURLs', { urls: [
+                '*.png', '*.jpg', '*.jpeg', '*.gif', '*.svg', '*.ico', '*.webp',
+                '*.woff', '*.woff2', '*.ttf', '*.otf',
+                '*google-analytics*', '*googletagmanager*', '*criteo*',
+                '*pinterest*', '*qualtrics*', '*oracleinfinity*',
+                '*datadoghq*', '*doubleclick*', '*facebook*', '*hotjar*',
+            ] });
+            console.log('[GolLookup] CDP resource blocking ativo');
+        } catch (e) { console.warn('[GolLookup] CDP block err:', e.message); }
 
         let pnrData = null;
         const pnrPromise = new Promise(resolve => {
             page.on('response', async resp => {
                 const url = resp.url();
-                if (url.includes('voegol') || url.includes('booking-api')) {
-                    console.log('[GolLookup]', Date.now()-t0, 'ms API:', url.substring(0,80), 'HTTP', resp.status());
+                if (url.includes('gol-auth-api') || url.includes('pnrBnpl')) {
+                    console.log(`[GolLookup] ${elapsed()} API: ${url.substring(0,90)} HTTP ${resp.status()}`);
                 }
                 if (!url.includes('pnrBnpl')) return;
                 try {
@@ -2210,55 +2244,56 @@ async function _executarGolLookup(jobId, pnr, origin, lastName) {
                     const json = JSON.parse(buf.toString('utf8'));
                     if (json?.success && json?.response?.pnrRetrieveResponse) {
                         pnrData = json;
-                        console.log('[GolLookup] pnrBnpl ✓ em', Date.now()-t0, 'ms');
+                        console.log('[GolLookup] pnrBnpl ✓', elapsed());
                         resolve(json);
                     } else {
-                        console.warn('[GolLookup] pnrBnpl sem pnrRetrieveResponse:', JSON.stringify(json).substring(0,200));
+                        console.warn('[GolLookup] pnrBnpl resp inválida:', JSON.stringify(json).substring(0,150));
                     }
-                } catch (e) { console.warn('[GolLookup] buffer parse err:', e.message); }
+                } catch (e) { console.warn('[GolLookup] buffer err:', e.message); }
             });
         });
 
         const golUrl = `https://b2c.voegol.com.br/minhas-viagens/encontrar-viagem?codigoReserva=${pnr}&origem=${origin}${lastName ? '&sobrenome=' + encodeURIComponent(lastName.toLowerCase()) : ''}`;
-        console.log('[GolLookup] goto:', golUrl);
+        console.log('[GolLookup] goto', elapsed());
 
-        await page.goto(golUrl, { waitUntil: 'domcontentloaded', timeout: 30000 }).catch(e => console.warn('[GolLookup] Nav err:', e.message));
-        console.log('[GolLookup] domcontentloaded em', Date.now()-t0, 'ms');
+        await page.goto(golUrl, { waitUntil: 'domcontentloaded', timeout: 25000 }).catch(e => console.warn('[GolLookup] Nav:', e.message));
+        console.log('[GolLookup] domcontentloaded', elapsed());
 
-        // Aguarda até 45s pelo pnrBnpl
-        await Promise.race([pnrPromise, new Promise(r => setTimeout(r, 45000))]);
-        console.log('[GolLookup] após wait em', Date.now()-t0, 'ms, pnrData:', pnrData ? 'OK' : 'null');
+        // Aguarda pnrBnpl por até 25s após domcontentloaded (hard timeout cobre o resto)
+        await Promise.race([pnrPromise, new Promise(r => setTimeout(r, 25000))]);
+        console.log('[GolLookup] após wait', elapsed(), '| pnrData:', pnrData ? 'OK' : 'null');
 
         const pageTitle = await page.title().catch(() => '');
-        const pageUrl   = page.url();
-        const bodyText  = await page.evaluate(() => document.body?.innerText?.substring(0,300) || '').catch(() => '');
-        console.log('[GolLookup] título:', pageTitle, '| url:', pageUrl.substring(0,80));
-        console.log('[GolLookup] body:', bodyText.substring(0,200).replace(/\n/g,' '));
+        const bodySnip  = await page.evaluate(() => (document.body?.innerText||'').substring(0,200)).catch(() => '');
+        console.log('[GolLookup] título:', pageTitle);
+        console.log('[GolLookup] body:', bodySnip.replace(/\n/g,' ').substring(0,150));
 
-        const isCf = /just a moment|checking your|attention required|cloudflare/i.test(pageTitle + ' ' + bodyText);
-        if (isCf) console.warn('[GolLookup] ⚠ CLOUDFLARE detectado!');
+        const isCf = /just a moment|checking your|attention required|cloudflare/i.test(pageTitle + ' ' + bodySnip);
+        if (isCf) console.warn('[GolLookup] ⚠ CLOUDFLARE!');
 
-        // Fallback: chama pnrBnpl de dentro do browser (cookies/auth já presentes)
+        // Fallback page.evaluate() com timeout explícito
         if (!pnrData && !isCf) {
-            console.log('[GolLookup] tentando page.evaluate()...');
+            console.log('[GolLookup] page.evaluate() fallback...');
             try {
-                const ev = await page.evaluate(async (p, o, l) => {
-                    const u = `https://booking-api.voegol.com.br/api/pnrBnpl/pnr-bnpl-validation-v2?context=b2c&flow=consult&pnr=${p}&origin=${o}${l ? '&lastName='+encodeURIComponent(l) : ''}`;
-                    try {
-                        const r = await fetch(u, { credentials: 'include', headers: { 'Accept': 'application/json', 'Origin': location.origin } });
-                        if (!r.ok) return { httpStatus: r.status };
-                        return await r.json();
-                    } catch (e) { return { fetchError: e.message }; }
-                }, pnr, origin, lastName || '');
-                console.log('[GolLookup] page.evaluate() resultado:', JSON.stringify(ev)?.substring(0,200));
-                if (ev?.success && ev?.response?.pnrRetrieveResponse) { pnrData = ev; console.log('[GolLookup] page.evaluate() ✓'); }
-            } catch (e) { console.warn('[GolLookup] page.evaluate() err:', e.message); }
+                const ev = await Promise.race([
+                    page.evaluate(async (p, o, l) => {
+                        const u = `https://booking-api.voegol.com.br/api/pnrBnpl/pnr-bnpl-validation-v2?context=b2c&flow=consult&pnr=${p}&origin=${o}${l ? '&lastName='+encodeURIComponent(l) : ''}`;
+                        try {
+                            const r = await fetch(u, { credentials: 'include', headers: { 'Accept': 'application/json', 'Origin': location.origin } });
+                            return r.ok ? await r.json() : { httpStatus: r.status };
+                        } catch (e) { return { fetchError: e.message }; }
+                    }, pnr, origin, lastName || ''),
+                    new Promise(r => setTimeout(() => r(null), 8000)) // timeout 8s
+                ]);
+                console.log('[GolLookup] evaluate resp:', JSON.stringify(ev)?.substring(0,150));
+                if (ev?.success && ev?.response?.pnrRetrieveResponse) { pnrData = ev; console.log('[GolLookup] evaluate ✓'); }
+            } catch (e) { console.warn('[GolLookup] evaluate err:', e.message); }
         }
 
         if (!pnrData) {
-            let motivo;
-            if (isCf) motivo = 'Cloudflare bloqueou — IP do servidor na blocklist';
-            else motivo = `Dados não encontrados (título: "${pageTitle}") — verifique localizador, origem e sobrenome`;
+            const motivo = isCf
+                ? 'Cloudflare bloqueou o IP do servidor'
+                : `Dados não encontrados — título: "${pageTitle}" — verifique localizador, origem e sobrenome`;
             console.warn('[GolLookup] FALHOU:', motivo);
             golJobs.set(jobId, { status: 'failed', error: motivo, pageTitle, createdAt: Date.now() });
             return;
@@ -2284,7 +2319,9 @@ async function _executarGolLookup(jobId, pnr, origin, lastName) {
         console.error('[GolLookup] job', jobId, 'erro:', err.message);
         golJobs.set(jobId, { status: 'failed', error: err.message, createdAt: Date.now() });
     } finally {
+        clearTimeout(hardTimeout);
         if (browser) await browser.close().catch(() => {});
+        console.log(`[GolLookup] job ${jobId} encerrado, status:`, golJobs.get(jobId)?.status);
     }
 }
 
