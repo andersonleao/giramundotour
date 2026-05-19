@@ -2055,45 +2055,109 @@ router.post('/azul-lookup', authMiddleware, async (req, res) => {
     const { pnr, origin } = req.body;
     if (!pnr || !origin) return res.status(400).json({ success: false, message: 'pnr e origin são obrigatórios' });
 
-    const endpoints = [
-        `https://b2c-api.voeazul.com.br/booking/v5/bookings/${pnr}?origin=${origin}`,
-        `https://b2c-api.voeazul.com.br/booking/v4/bookings/${pnr}?origin=${origin}`,
-        `https://b2c-api.voeazul.com.br/api/bookings/${pnr}?origin=${origin}`,
-    ];
+    // Fluxo correto: Firebase anon → token Azul → POST /canonical/api/booking/v5/bookings/{pnr}
+    const FIREBASE_KEY = 'AIzaSyCqYQxIZDC5usp5iTuiPacTF9xRvfw7wmg';
+    const OCP_KEY      = 'fb38e642c899485e893eb8d0a373cc17';
 
-    const headers = {
-        'Accept': 'application/json, text/plain, */*',
-        'Accept-Language': 'pt-BR,pt;q=0.9,en-US;q=0.8,en;q=0.7',
-        'Accept-Encoding': 'gzip, deflate, br',
-        'Origin': 'https://www.voeazul.com.br',
-        'Referer': `https://www.voeazul.com.br/br/pt/home/minhas-viagens/confirmacao?pnr=${pnr}&origin=${origin}`,
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
-        'sec-ch-ua': '"Chromium";v="124","Google Chrome";v="124","Not-A.Brand";v="99"',
-        'sec-ch-ua-mobile': '?0',
-        'sec-ch-ua-platform': '"Windows"',
-        'sec-fetch-dest': 'empty',
-        'sec-fetch-mode': 'cors',
-        'sec-fetch-site': 'same-site',
-    };
+    try {
+        // 1. Firebase anonymous signup
+        console.log(`[AzulLookup] ${pnr}/${origin} — obtendo token Firebase...`);
+        const fbResp = await fetch(
+            `https://identitytoolkit.googleapis.com/v1/accounts:signUp?key=${FIREBASE_KEY}`,
+            { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ returnSecureToken: true }), signal: AbortSignal.timeout(10000) }
+        );
+        if (!fbResp.ok) throw new Error(`Firebase HTTP ${fbResp.status}`);
+        const fbData = await fbResp.json();
+        if (!fbData.idToken) throw new Error('Firebase: sem idToken');
 
-    for (const ep of endpoints) {
-        try {
-            const r = await fetch(ep, { headers });
-            console.log(`[AzulLookup] ${ep} → HTTP ${r.status}`);
-            if (r.ok) {
-                const json = await r.json();
-                if (json && Object.keys(json).length > 2) {
-                    // Extrai dados do booking
-                    const bilheteData = extrairBilheteAzul([{ url: ep, data: json }], '', '');
-                    return res.json({ success: true, bilheteData, raw: json });
-                }
+        // 2. Trocar por token Azul
+        console.log(`[AzulLookup] Trocando por token Azul...`);
+        const azResp = await fetch(
+            'https://b2c-api.voeazul.com.br/authentication/api/authentication/v1/token',
+            {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json', 'Accept': 'application/json',
+                    'ocp-apim-subscription-key': OCP_KEY,
+                    'Origin': 'https://www.voeazul.com.br', 'Referer': 'https://www.voeazul.com.br/',
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+                },
+                body: JSON.stringify({ firebaseToken: fbData.idToken }),
+                signal: AbortSignal.timeout(10000),
             }
-        } catch (e) {
-            console.warn(`[AzulLookup] Erro em ${ep}:`, e.message);
-        }
-    }
+        );
+        if (!azResp.ok) throw new Error(`Azul auth HTTP ${azResp.status}`);
+        const azData  = await azResp.json();
+        const azToken = azData.data;
+        if (!azToken) throw new Error('Azul: token ausente na resposta');
 
-    res.json({ success: false, blocked: true, message: 'API Azul bloqueada neste servidor (Akamai). Preencha os dados manualmente.' });
+        // 3. Buscar reserva via POST com departureStation no body
+        console.log(`[AzulLookup] Buscando reserva ${pnr}...`);
+        const bkResp = await fetch(
+            `https://b2c-api.voeazul.com.br/canonical/api/booking/v5/bookings/${pnr}`,
+            {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json', 'Accept': 'application/json',
+                    'Authorization': `Bearer ${azToken}`,
+                    'ocp-apim-subscription-key': OCP_KEY,
+                    'Origin': 'https://www.voeazul.com.br',
+                    'Referer': `https://www.voeazul.com.br/br/pt/home/minhas-viagens/confirmacao?pnr=${pnr}&origin=${origin}`,
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+                },
+                body: JSON.stringify({ departureStation: origin }),
+                signal: AbortSignal.timeout(12000),
+            }
+        );
+        console.log(`[AzulLookup] Booking ${pnr} → HTTP ${bkResp.status}`);
+        if (!bkResp.ok) {
+            return res.json({ success: false, blocked: bkResp.status === 403, httpStatus: bkResp.status,
+                message: bkResp.status === 404 ? 'Reserva não encontrada' : `HTTP ${bkResp.status}` });
+        }
+
+        const json = await bkResp.json();
+        // Converte para bilheteData (formato esperado pelo frontend)
+        const root     = json?.data || json;
+        const journeys = root?.journeys || [];
+        if (!journeys.length) return res.json({ success: false, message: 'Booking sem journeys' });
+
+        function toDataLookup(v) { if (!v) return ''; const m = String(v).match(/(\d{4}-\d{2}-\d{2})/); return m ? m[1] : ''; }
+        function toHoraLookup(v) { if (!v) return ''; const m = String(v).match(/T(\d{2}:\d{2})/); return m ? m[1] : v.substring(0,5); }
+
+        const id0 = journeys[0].identifier || journeys[0];
+        const ida = {
+            origem:      id0.departureStation || origin,
+            destino:     id0.arrivalStation   || '',
+            data:        toDataLookup(id0.std),
+            horaPartida: toHoraLookup(id0.std),
+            horaChegada: toHoraLookup(id0.sta),
+            voo:         `AD ${id0.flightNumber || ''}`.trim(),
+        };
+        let volta = null;
+        if (journeys.length > 1) {
+            const id1 = journeys[1].identifier || journeys[1];
+            volta = {
+                origem:      id1.departureStation || '',
+                destino:     id1.arrivalStation   || '',
+                data:        toDataLookup(id1.std),
+                horaPartida: toHoraLookup(id1.std),
+                horaChegada: toHoraLookup(id1.sta),
+                voo:         `AD ${id1.flightNumber || ''}`.trim(),
+            };
+        }
+        const pj = journeys[0].passengerJourney?.[0];
+        const passageiroNome = pj?.passenger
+            ? `${pj.passenger.firstName||''} ${pj.passenger.lastName||''}`.trim()
+            : '';
+
+        const bilheteData = { passageiroNome, tripType: root.tripType || '', ida, volta };
+        console.log('[AzulLookup] OK:', JSON.stringify({ ida: { data: ida.data, origem: ida.origem, destino: ida.destino }, volta: volta ? { data: volta.data } : null }));
+        return res.json({ success: true, bilheteData });
+
+    } catch (err) {
+        console.warn('[AzulLookup] Erro:', err.message);
+        return res.json({ success: false, blocked: true, message: 'Falha no lookup Azul: ' + err.message });
+    }
 });
 
 router.get('/debug-azul', authMiddleware, (req, res) => {
