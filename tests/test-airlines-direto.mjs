@@ -208,8 +208,8 @@ function formatar(r) {
 
 // ── Substitua pelos localizadores reais de reservas ativas ───────────────────
 const CASOS = [
-    // Azul: localizador de 6 letras + origem IATA (ex: SSA, GRU, SDU)
-    { fn: () => consultarAzul('VR6C3H', 'SSA'),            label: 'Azul  — VR6C3H / origem SSA (reserva de teste — pode estar expirada)' },
+    // Azul: localizador de 6 letras + origem IATA (ex: REC, GRU, SDU)
+    { fn: () => consultarAzul('VR6C3H', 'REC'),            label: 'Azul  — VR6C3H / origem REC (reserva expirada — substituir por uma ativa)' },
     // GOL: requer token de sessão do browser — retorna bloqueado sem Puppeteer
     { fn: () => consultarGol('ABCDEF', 'GRU', 'SILVA'),    label: 'GOL   — ABCDEF / GRU / SILVA (substituir por reserva real)' },
     // LATAM: número do pedido (9 dígitos) + sobrenome
