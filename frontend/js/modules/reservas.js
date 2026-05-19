@@ -523,28 +523,55 @@ const ReservasModule = {
                 App.showToast('Preencha Localizador, Sobrenome e Origem', 'error');
                 return;
             }
-            const btnGol = document.getElementById('btnGolImportar');
-            if (btnGol) { btnGol.disabled = true; btnGol.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span> Buscando...'; }
 
-            let bilheteData = null;
+            const btnGol = document.getElementById('btnGolImportar');
+            const setBtn = (txt, disabled) => { if (btnGol) { btnGol.disabled = disabled; btnGol.innerHTML = txt; } };
+            setBtn('<span class="spinner-border spinner-border-sm me-1"></span> Buscando...', true);
+
+            const urlReserva = `https://b2c.voegol.com.br/minhas-viagens/encontrar-viagem?codigoReserva=${localizador}&origem=${origem}&sobrenome=${encodeURIComponent(sobrenome.toLowerCase())}`;
+            const emitidoPor = document.getElementById('reservaEmitidoPor')?.value || '';
+
             try {
-                const resp = await fetch('/api/reservas/gol-lookup', {
+                // 1. Inicia job (resposta imediata com jobId)
+                const startResp = await fetch('/api/reservas/gol-lookup', {
                     method: 'POST', headers: this._authHeaders(),
                     body: JSON.stringify({ pnr: localizador, origin: origem, lastName: sobrenome })
                 });
-                const result = await resp.json();
-                if (result.success && result.bilheteData?.ida?.data) bilheteData = result.bilheteData;
-            } catch (e) { console.warn('[GOL] Lookup falhou:', e.message); }
+                const startData = await startResp.json();
+                if (!startData.success || !startData.jobId) throw new Error(startData.message || 'Falha ao iniciar lookup');
 
-            if (btnGol) { btnGol.disabled = false; btnGol.innerHTML = '<i class="bi bi-cloud-download"></i> Importar'; }
+                // 2. Polling a cada 2s por até 45s
+                const jobId = startData.jobId;
+                let bilheteData = null;
+                let tentativas  = 0;
+                const maxTentativas = 22; // 22 × 2s = 44s
 
-            const urlReserva  = `https://b2c.voegol.com.br/minhas-viagens/encontrar-viagem?codigoReserva=${localizador}&origem=${origem}&sobrenome=${encodeURIComponent(sobrenome.toLowerCase())}`;
-            const emitidoPor  = document.getElementById('reservaEmitidoPor')?.value || '';
+                while (tentativas < maxTentativas) {
+                    await new Promise(r => setTimeout(r, 2000));
+                    tentativas++;
+                    try {
+                        const pollResp = await fetch(`/api/reservas/gol-status/${jobId}`, { headers: this._authHeaders() });
+                        const poll     = await pollResp.json();
+                        if (poll.status === 'done') {
+                            bilheteData = poll.bilheteData;
+                            break;
+                        }
+                        if (poll.status === 'failed') {
+                            console.warn('[GOL] Job falhou:', poll.error);
+                            break;
+                        }
+                    } catch (e) { /* polling pode falhar temporariamente */ }
+                }
 
-            // Salva com dados obtidos (ou apenas localizador/origem se lookup falhou)
-            // Destino e datas podem ser preenchidos pela edição inline da grid
-            this._salvarReservaGol(localizador, sobrenome, origem, urlReserva, emitidoPor,
-                bilheteData || { passageiroNome: sobrenome, tripType: '', ida: { origem, destino: '', data: '', horaPartida: '', horaChegada: '', voo: '' }, volta: null });
+                setBtn('<i class="bi bi-cloud-download"></i> Importar', false);
+                this._salvarReservaGol(localizador, sobrenome, origem, urlReserva, emitidoPor,
+                    bilheteData || { passageiroNome: sobrenome, tripType: '', ida: { origem, destino: '', data: '', horaPartida: '', horaChegada: '', voo: '' }, volta: null });
+
+            } catch (e) {
+                console.warn('[GOL] Erro:', e.message);
+                setBtn('<i class="bi bi-cloud-download"></i> Importar', false);
+                App.showToast('Erro ao importar GOL: ' + e.message, 'error');
+            }
             return;
 
         } else if (cia === 'latam') {

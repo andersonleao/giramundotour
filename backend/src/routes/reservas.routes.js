@@ -2160,49 +2160,48 @@ router.post('/azul-lookup', authMiddleware, async (req, res) => {
     }
 });
 
-/**
- * POST /api/reservas/gol-lookup
- * Usa Puppeteer para capturar pnrBnpl da GOL.
- * Usa domcontentloaded + Promise.race(pnrBnpl | timeout 22s) para ficar dentro
- * do limite de 30s do Render. networkidle2 era lento demais (>30s).
- */
-router.post('/gol-lookup', authMiddleware, async (req, res) => {
-    const { pnr, origin, lastName } = req.body;
-    if (!pnr || !origin) return res.status(400).json({ success: false, message: 'pnr e origin são obrigatórios' });
+// ─── GOL Lookup — Async Job System ───────────────────────────────────────────
+// Puppeteer leva ~23s — excede o timeout de 30s do Render se resposta for síncrona.
+// Solução: POST responde imediatamente com jobId; Puppeteer roda em background;
+//          frontend faz polling em GET /gol-status/:jobId.
+// ─────────────────────────────────────────────────────────────────────────────
 
+const golJobs = new Map(); // jobId → { status, bilheteData?, error?, createdAt }
+
+// Limpa jobs com mais de 10 minutos para não vazar memória
+setInterval(() => {
+    const cutoff = Date.now() - 10 * 60 * 1000;
+    for (const [id, job] of golJobs) {
+        if (job.createdAt < cutoff) golJobs.delete(id);
+    }
+}, 5 * 60 * 1000);
+
+async function _executarGolLookup(jobId, pnr, origin, lastName) {
     let browser;
     try {
         const chromePath = process.env.PUPPETEER_EXECUTABLE_PATH || undefined;
         browser = await puppeteerExtra.launch({
             headless: true,
             executablePath: chromePath,
-            args: [
-                '--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage',
-                '--disable-gpu', '--no-zygote',
-                '--disable-blink-features=AutomationControlled',
-                '--window-size=1366,768'
-            ]
+            args: ['--no-sandbox','--disable-setuid-sandbox','--disable-dev-shm-usage',
+                   '--disable-gpu','--no-zygote','--disable-blink-features=AutomationControlled',
+                   '--window-size=1366,768']
         });
         const page = await browser.newPage();
         await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36');
         await page.setViewport({ width: 1366, height: 768 });
         await page.setExtraHTTPHeaders({ 'Accept-Language': 'pt-BR,pt;q=0.9,en-US;q=0.8' });
 
-        // SEM setRequestInterception — interfere no listener de resposta
-        // Resolve assim que pnrBnpl for capturado
         let pnrData = null;
         const pnrPromise = new Promise(resolve => {
             page.on('response', async resp => {
-                const url = resp.url();
-                if (!url.includes('pnrBnpl') && !(url.includes('booking-api') && url.includes(pnr))) return;
+                if (!resp.url().includes('pnrBnpl')) return;
                 try {
-                    const buf = await resp.buffer();
-                    const txt = buf.toString('utf8');
-                    if (!txt || txt.length < 20) return;
-                    const json = JSON.parse(txt);
+                    const buf  = await resp.buffer();
+                    const json = JSON.parse(buf.toString('utf8'));
                     if (json?.success && json?.response?.pnrRetrieveResponse) {
                         pnrData = json;
-                        console.log('[GolLookup] pnrBnpl capturado ✓');
+                        console.log('[GolLookup] pnrBnpl ✓ jobId:', jobId);
                         resolve(json);
                     }
                 } catch (_) {}
@@ -2210,85 +2209,91 @@ router.post('/gol-lookup', authMiddleware, async (req, res) => {
         });
 
         const golUrl = `https://b2c.voegol.com.br/minhas-viagens/encontrar-viagem?codigoReserva=${pnr}&origem=${origin}${lastName ? '&sobrenome=' + encodeURIComponent(lastName.toLowerCase()) : ''}`;
-        console.log('[GolLookup] Navegando:', golUrl);
+        console.log('[GolLookup] job', jobId, 'navegando...');
 
-        // await domcontentloaded (~2s) — mantém sessão ativa para JS executar
-        // pnrBnpl chega ~21s após início → aguarda 25s adicionais (total ~27s, <30s limite Render)
-        await page.goto(golUrl, { waitUntil: 'domcontentloaded', timeout: 25000 }).catch(e => console.warn('[GolLookup] Nav:', e.message));
-        await Promise.race([pnrPromise, new Promise(r => setTimeout(r, 25000))]);
+        await page.goto(golUrl, { waitUntil: 'domcontentloaded', timeout: 30000 }).catch(e => console.warn('[GolLookup] Nav:', e.message));
+        // Aguarda até 35s pelo pnrBnpl (sem risco de timeout — rodamos em background)
+        await Promise.race([pnrPromise, new Promise(r => setTimeout(r, 35000))]);
 
-        // Diagnóstico
         const pageTitle = await page.title().catch(() => '');
-        console.log('[GolLookup] Título:', pageTitle);
-        const isCfChallenge = /just a moment|checking your|attention required|cloudflare/i.test(pageTitle);
-        if (isCfChallenge) console.warn('[GolLookup] ⚠ Cloudflare bloqueou no Render');
+        const isCf = /just a moment|checking your|attention required|cloudflare/i.test(pageTitle);
+        console.log('[GolLookup] job', jobId, 'título:', pageTitle, isCf ? '⚠ Cloudflare' : '');
 
-        // Fallback: page.evaluate() com cookies/auth do browser (contorna CORS)
-        if (!pnrData && !isCfChallenge) {
-            console.log('[GolLookup] Tentando page.evaluate()...');
+        // Fallback: chama pnrBnpl de dentro do browser (cookies/auth já presentes)
+        if (!pnrData && !isCf) {
             try {
                 const ev = await page.evaluate(async (p, o, l) => {
-                    const u = `https://booking-api.voegol.com.br/api/pnrBnpl/pnr-bnpl-validation-v2?context=b2c&flow=consult&pnr=${p}&origin=${o}${l ? '&lastName=' + encodeURIComponent(l) : ''}`;
+                    const u = `https://booking-api.voegol.com.br/api/pnrBnpl/pnr-bnpl-validation-v2?context=b2c&flow=consult&pnr=${p}&origin=${o}${l ? '&lastName='+encodeURIComponent(l) : ''}`;
                     try {
-                        const r = await fetch(u, { credentials: 'include', headers: { 'Accept': 'application/json', 'Origin': location.origin, 'Referer': location.href } });
+                        const r = await fetch(u, { credentials: 'include', headers: { 'Accept': 'application/json', 'Origin': location.origin } });
                         return r.ok ? await r.json() : null;
                     } catch { return null; }
                 }, pnr, origin, lastName || '');
-                if (ev?.success && ev?.response?.pnrRetrieveResponse) {
-                    pnrData = ev;
-                    console.log('[GolLookup] pnrBnpl via page.evaluate() ✓');
-                }
-            } catch (e) { console.warn('[GolLookup] page.evaluate() erro:', e.message); }
+                if (ev?.success && ev?.response?.pnrRetrieveResponse) { pnrData = ev; console.log('[GolLookup] page.evaluate() ✓'); }
+            } catch (e) { console.warn('[GolLookup] page.evaluate() err:', e.message); }
         }
 
         if (!pnrData) {
-            const motivo = isCfChallenge ? 'Cloudflare bloqueou o servidor' : 'dados não encontrados — verifique localizador, origem e sobrenome';
-            console.warn('[GolLookup] Falhou:', motivo);
-            return res.json({ success: false, blocked: true, message: `GOL: ${motivo}` });
+            const motivo = isCf ? 'Cloudflare bloqueou o servidor' : 'dados não encontrados — verifique localizador, origem e sobrenome';
+            golJobs.set(jobId, { status: 'failed', error: motivo, createdAt: Date.now() });
+            return;
         }
 
+        // Parseia bilheteData
         const pnrObj = pnrData.response.pnrRetrieveResponse.pnr || {};
         const parts  = pnrObj?.itinerary?.itineraryParts || [];
-
-        function toDataG(dt) { return dt ? String(dt).substring(0, 10) : ''; }
-        function toHoraG(dt) { return dt ? String(dt).substring(11, 16) : ''; }
-
+        const toDataG = dt => dt ? String(dt).substring(0,10) : '';
+        const toHoraG = dt => dt ? String(dt).substring(11,16) : '';
         const seg0 = parts[0]?.segments?.[0] || {};
-        const lastPart = parts.length > 1 ? parts[parts.length - 1] : null;
-        const seg1 = lastPart?.segments?.[0] || null;
+        const seg1 = parts.length > 1 ? (parts[parts.length-1]?.segments?.[0] || null) : null;
 
-        const ida = {
-            origem:      seg0.origin      || origin,
-            destino:     seg0.destination || '',
-            data:        toDataG(seg0.departure),
-            horaPartida: toHoraG(seg0.departure),
-            horaChegada: toHoraG(seg0.arrival),
-            voo:         `G3 ${seg0.flight?.flightNumber || ''}`.trim()
-        };
-        const volta = seg1 ? {
-            origem:      seg1.origin      || '',
-            destino:     seg1.destination || '',
-            data:        toDataG(seg1.departure),
-            horaPartida: toHoraG(seg1.departure),
-            horaChegada: toHoraG(seg1.arrival),
-            voo:         `G3 ${seg1.flight?.flightNumber || ''}`.trim()
-        } : null;
+        const ida = { origem: seg0.origin||origin, destino: seg0.destination||'', data: toDataG(seg0.departure), horaPartida: toHoraG(seg0.departure), horaChegada: toHoraG(seg0.arrival), voo: `G3 ${seg0.flight?.flightNumber||''}`.trim() };
+        const volta = seg1 ? { origem: seg1.origin||'', destino: seg1.destination||'', data: toDataG(seg1.departure), horaPartida: toHoraG(seg1.departure), horaChegada: toHoraG(seg1.arrival), voo: `G3 ${seg1.flight?.flightNumber||''}`.trim() } : null;
+        const p0 = (pnrObj?.passengers||[])[0];
+        const passageiroNome = p0 ? `${p0.firstName||''} ${p0.lastName||''}`.trim() : (lastName||'');
 
-        const passageiro = (pnrObj?.passengers || [])[0];
-        const passageiroNome = passageiro
-            ? `${passageiro.firstName || ''} ${passageiro.lastName || ''}`.trim()
-            : (lastName || '');
-
-        const bilheteData = { passageiroNome, tripType: parts.length > 1 ? 'Roundtrip' : 'OneWay', ida, volta };
-        console.log('[GolLookup] OK:', JSON.stringify({ ida: { data: ida.data, origem: ida.origem, destino: ida.destino }, volta: volta ? { data: volta.data } : null }));
-        return res.json({ success: true, bilheteData });
+        golJobs.set(jobId, { status: 'done', bilheteData: { passageiroNome, tripType: parts.length>1?'Roundtrip':'OneWay', ida, volta }, createdAt: Date.now() });
+        console.log('[GolLookup] job', jobId, 'concluído ✓', ida.origem, '→', ida.destino, ida.data);
 
     } catch (err) {
-        console.error('[GolLookup] Erro:', err.message);
-        return res.json({ success: false, blocked: true, message: 'Erro no lookup GOL: ' + err.message });
+        console.error('[GolLookup] job', jobId, 'erro:', err.message);
+        golJobs.set(jobId, { status: 'failed', error: err.message, createdAt: Date.now() });
     } finally {
         if (browser) await browser.close().catch(() => {});
     }
+}
+
+/**
+ * POST /api/reservas/gol-lookup
+ * Responde imediatamente com jobId — Puppeteer roda em background.
+ * Frontend faz polling em GET /gol-status/:jobId.
+ */
+router.post('/gol-lookup', authMiddleware, (req, res) => {
+    const { pnr, origin, lastName } = req.body;
+    if (!pnr || !origin) return res.status(400).json({ success: false, message: 'pnr e origin são obrigatórios' });
+
+    const jobId = `gol_${Date.now()}_${Math.random().toString(36).substr(2, 6)}`;
+    golJobs.set(jobId, { status: 'processing', createdAt: Date.now() });
+
+    // Inicia Puppeteer sem await — resposta HTTP sai imediatamente
+    _executarGolLookup(jobId, pnr.toUpperCase(), origin.toUpperCase(), (lastName||'').toUpperCase())
+        .catch(err => {
+            console.error('[GolLookup] Erro fatal job', jobId, err.message);
+            if (golJobs.get(jobId)?.status === 'processing')
+                golJobs.set(jobId, { status: 'failed', error: err.message, createdAt: Date.now() });
+        });
+
+    res.json({ success: true, jobId, status: 'processing' });
+});
+
+/**
+ * GET /api/reservas/gol-status/:jobId
+ * Polling do resultado do lookup GOL.
+ */
+router.get('/gol-status/:jobId', authMiddleware, (req, res) => {
+    const job = golJobs.get(req.params.jobId);
+    if (!job) return res.status(404).json({ success: false, message: 'Job não encontrado ou expirado' });
+    res.json({ success: true, ...job });
 });
 
 /**
