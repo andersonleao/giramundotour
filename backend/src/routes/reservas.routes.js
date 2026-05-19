@@ -2184,12 +2184,12 @@ async function _executarGolLookup(jobId, pnr, origin, lastName) {
 
     // Hard timeout: fecha browser e marca failed após 55s (evita OOM no Render 512MB)
     const hardTimeout = setTimeout(() => {
-        console.warn('[GolLookup] HARD TIMEOUT 55s — encerrando browser');
+        console.warn('[GolLookup] HARD TIMEOUT 90s — encerrando browser');
         if (browser) browser.close().catch(() => {});
         if (golJobs.get(jobId)?.status === 'processing') {
-            golJobs.set(jobId, { status: 'failed', error: 'Timeout: GOL demorou mais de 55s (possível Cloudflare ou memória insuficiente)', createdAt: Date.now() });
+            golJobs.set(jobId, { status: 'failed', error: 'Timeout: pnrBnpl não capturado em 90s (rede lenta ou Cloudflare)', createdAt: Date.now() });
         }
-    }, 55000);
+    }, 90000);
 
     try {
         const chromePath = process.env.PUPPETEER_EXECUTABLE_PATH || undefined;
@@ -2239,28 +2239,36 @@ async function _executarGolLookup(jobId, pnr, origin, lastName) {
                     console.log(`[GolLookup] ${elapsed()} API: ${url.substring(0,90)} HTTP ${resp.status()}`);
                 }
                 if (!url.includes('pnrBnpl')) return;
+                // Tenta buffer() primeiro; se falhar usa text() como fallback
+                let rawTxt = '';
+                try { rawTxt = (await resp.buffer()).toString('utf8'); }
+                catch (e) {
+                    console.warn('[GolLookup] buffer() err:', e.message, '— tentando text()');
+                    try { rawTxt = await resp.text(); } catch (_) {}
+                }
                 try {
-                    const buf  = await resp.buffer();
-                    const json = JSON.parse(buf.toString('utf8'));
+                    if (!rawTxt || rawTxt.length < 10) return;
+                    const json = JSON.parse(rawTxt);
                     if (json?.success && json?.response?.pnrRetrieveResponse) {
                         pnrData = json;
                         console.log('[GolLookup] pnrBnpl ✓', elapsed());
                         resolve(json);
                     } else {
-                        console.warn('[GolLookup] pnrBnpl resp inválida:', JSON.stringify(json).substring(0,150));
+                        console.warn('[GolLookup] pnrBnpl resp inválida:', rawTxt.substring(0,150));
                     }
-                } catch (e) { console.warn('[GolLookup] buffer err:', e.message); }
+                } catch (e) { console.warn('[GolLookup] parse err:', e.message, rawTxt.substring(0,100)); }
             });
         });
 
         const golUrl = `https://b2c.voegol.com.br/minhas-viagens/encontrar-viagem?codigoReserva=${pnr}&origem=${origin}${lastName ? '&sobrenome=' + encodeURIComponent(lastName.toLowerCase()) : ''}`;
         console.log('[GolLookup] goto', elapsed());
 
-        await page.goto(golUrl, { waitUntil: 'domcontentloaded', timeout: 25000 }).catch(e => console.warn('[GolLookup] Nav:', e.message));
+        await page.goto(golUrl, { waitUntil: 'domcontentloaded', timeout: 35000 }).catch(e => console.warn('[GolLookup] Nav:', e.message));
         console.log('[GolLookup] domcontentloaded', elapsed());
 
-        // Aguarda pnrBnpl por até 25s após domcontentloaded (hard timeout cobre o resto)
-        await Promise.race([pnrPromise, new Promise(r => setTimeout(r, 25000))]);
+        // Aguarda pnrBnpl por até 50s após domcontentloaded
+        // (Render = AWS→Brasil: mais latência que local, pnrBnpl pode levar 40-50s)
+        await Promise.race([pnrPromise, new Promise(r => setTimeout(r, 50000))]);
         console.log('[GolLookup] após wait', elapsed(), '| pnrData:', pnrData ? 'OK' : 'null');
 
         const pageTitle = await page.title().catch(() => '');
