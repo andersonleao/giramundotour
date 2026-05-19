@@ -540,11 +540,11 @@ const ReservasModule = {
                 const startData = await startResp.json();
                 if (!startData.success || !startData.jobId) throw new Error(startData.message || 'Falha ao iniciar lookup');
 
-                // 2. Polling a cada 2s por até 45s
+                // 2. Polling a cada 2s por até 60s
                 const jobId = startData.jobId;
                 let bilheteData = null;
                 let tentativas  = 0;
-                const maxTentativas = 22; // 22 × 2s = 44s
+                const maxTentativas = 30; // 30 × 2s = 60s
 
                 while (tentativas < maxTentativas) {
                     await new Promise(r => setTimeout(r, 2000));
@@ -557,15 +557,21 @@ const ReservasModule = {
                             break;
                         }
                         if (poll.status === 'failed') {
-                            console.warn('[GOL] Job falhou:', poll.error);
-                            break;
+                            setBtn('<i class="bi bi-cloud-download"></i> Importar', false);
+                            App.showToast('GOL: ' + (poll.error || 'Falha na importação'), 'error');
+                            return;
                         }
                     } catch (e) { /* polling pode falhar temporariamente */ }
                 }
 
+                if (!bilheteData) {
+                    setBtn('<i class="bi bi-cloud-download"></i> Importar', false);
+                    App.showToast('GOL: timeout ao buscar dados. Tente novamente.', 'error');
+                    return;
+                }
+
                 setBtn('<i class="bi bi-cloud-download"></i> Importar', false);
-                this._salvarReservaGol(localizador, sobrenome, origem, urlReserva, emitidoPor,
-                    bilheteData || { passageiroNome: sobrenome, tripType: '', ida: { origem, destino: '', data: '', horaPartida: '', horaChegada: '', voo: '' }, volta: null });
+                this._salvarReservaGol(localizador, sobrenome, origem, urlReserva, emitidoPor, bilheteData);
 
             } catch (e) {
                 console.warn('[GOL] Erro:', e.message);

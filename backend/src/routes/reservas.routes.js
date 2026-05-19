@@ -2178,8 +2178,11 @@ setInterval(() => {
 
 async function _executarGolLookup(jobId, pnr, origin, lastName) {
     let browser;
+    const t0 = Date.now();
+    console.log(`[GolLookup] === job ${jobId} INICIADO === pnr=${pnr} origin=${origin} lastName=${lastName}`);
     try {
         const chromePath = process.env.PUPPETEER_EXECUTABLE_PATH || undefined;
+        console.log('[GolLookup] chromePath:', chromePath || 'default');
         browser = await puppeteerExtra.launch({
             headless: true,
             executablePath: chromePath,
@@ -2187,6 +2190,8 @@ async function _executarGolLookup(jobId, pnr, origin, lastName) {
                    '--disable-gpu','--no-zygote','--disable-blink-features=AutomationControlled',
                    '--window-size=1366,768']
         });
+        console.log('[GolLookup] browser OK em', Date.now()-t0, 'ms');
+
         const page = await browser.newPage();
         await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36');
         await page.setViewport({ width: 1366, height: 768 });
@@ -2195,47 +2200,67 @@ async function _executarGolLookup(jobId, pnr, origin, lastName) {
         let pnrData = null;
         const pnrPromise = new Promise(resolve => {
             page.on('response', async resp => {
-                if (!resp.url().includes('pnrBnpl')) return;
+                const url = resp.url();
+                if (url.includes('voegol') || url.includes('booking-api')) {
+                    console.log('[GolLookup]', Date.now()-t0, 'ms API:', url.substring(0,80), 'HTTP', resp.status());
+                }
+                if (!url.includes('pnrBnpl')) return;
                 try {
                     const buf  = await resp.buffer();
                     const json = JSON.parse(buf.toString('utf8'));
                     if (json?.success && json?.response?.pnrRetrieveResponse) {
                         pnrData = json;
-                        console.log('[GolLookup] pnrBnpl ✓ jobId:', jobId);
+                        console.log('[GolLookup] pnrBnpl ✓ em', Date.now()-t0, 'ms');
                         resolve(json);
+                    } else {
+                        console.warn('[GolLookup] pnrBnpl sem pnrRetrieveResponse:', JSON.stringify(json).substring(0,200));
                     }
-                } catch (_) {}
+                } catch (e) { console.warn('[GolLookup] buffer parse err:', e.message); }
             });
         });
 
         const golUrl = `https://b2c.voegol.com.br/minhas-viagens/encontrar-viagem?codigoReserva=${pnr}&origem=${origin}${lastName ? '&sobrenome=' + encodeURIComponent(lastName.toLowerCase()) : ''}`;
-        console.log('[GolLookup] job', jobId, 'navegando...');
+        console.log('[GolLookup] goto:', golUrl);
 
-        await page.goto(golUrl, { waitUntil: 'domcontentloaded', timeout: 30000 }).catch(e => console.warn('[GolLookup] Nav:', e.message));
-        // Aguarda até 35s pelo pnrBnpl (sem risco de timeout — rodamos em background)
-        await Promise.race([pnrPromise, new Promise(r => setTimeout(r, 35000))]);
+        await page.goto(golUrl, { waitUntil: 'domcontentloaded', timeout: 30000 }).catch(e => console.warn('[GolLookup] Nav err:', e.message));
+        console.log('[GolLookup] domcontentloaded em', Date.now()-t0, 'ms');
+
+        // Aguarda até 45s pelo pnrBnpl
+        await Promise.race([pnrPromise, new Promise(r => setTimeout(r, 45000))]);
+        console.log('[GolLookup] após wait em', Date.now()-t0, 'ms, pnrData:', pnrData ? 'OK' : 'null');
 
         const pageTitle = await page.title().catch(() => '');
-        const isCf = /just a moment|checking your|attention required|cloudflare/i.test(pageTitle);
-        console.log('[GolLookup] job', jobId, 'título:', pageTitle, isCf ? '⚠ Cloudflare' : '');
+        const pageUrl   = page.url();
+        const bodyText  = await page.evaluate(() => document.body?.innerText?.substring(0,300) || '').catch(() => '');
+        console.log('[GolLookup] título:', pageTitle, '| url:', pageUrl.substring(0,80));
+        console.log('[GolLookup] body:', bodyText.substring(0,200).replace(/\n/g,' '));
+
+        const isCf = /just a moment|checking your|attention required|cloudflare/i.test(pageTitle + ' ' + bodyText);
+        if (isCf) console.warn('[GolLookup] ⚠ CLOUDFLARE detectado!');
 
         // Fallback: chama pnrBnpl de dentro do browser (cookies/auth já presentes)
         if (!pnrData && !isCf) {
+            console.log('[GolLookup] tentando page.evaluate()...');
             try {
                 const ev = await page.evaluate(async (p, o, l) => {
                     const u = `https://booking-api.voegol.com.br/api/pnrBnpl/pnr-bnpl-validation-v2?context=b2c&flow=consult&pnr=${p}&origin=${o}${l ? '&lastName='+encodeURIComponent(l) : ''}`;
                     try {
                         const r = await fetch(u, { credentials: 'include', headers: { 'Accept': 'application/json', 'Origin': location.origin } });
-                        return r.ok ? await r.json() : null;
-                    } catch { return null; }
+                        if (!r.ok) return { httpStatus: r.status };
+                        return await r.json();
+                    } catch (e) { return { fetchError: e.message }; }
                 }, pnr, origin, lastName || '');
+                console.log('[GolLookup] page.evaluate() resultado:', JSON.stringify(ev)?.substring(0,200));
                 if (ev?.success && ev?.response?.pnrRetrieveResponse) { pnrData = ev; console.log('[GolLookup] page.evaluate() ✓'); }
             } catch (e) { console.warn('[GolLookup] page.evaluate() err:', e.message); }
         }
 
         if (!pnrData) {
-            const motivo = isCf ? 'Cloudflare bloqueou o servidor' : 'dados não encontrados — verifique localizador, origem e sobrenome';
-            golJobs.set(jobId, { status: 'failed', error: motivo, createdAt: Date.now() });
+            let motivo;
+            if (isCf) motivo = 'Cloudflare bloqueou — IP do servidor na blocklist';
+            else motivo = `Dados não encontrados (título: "${pageTitle}") — verifique localizador, origem e sobrenome`;
+            console.warn('[GolLookup] FALHOU:', motivo);
+            golJobs.set(jobId, { status: 'failed', error: motivo, pageTitle, createdAt: Date.now() });
             return;
         }
 
