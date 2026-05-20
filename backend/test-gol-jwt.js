@@ -2,7 +2,7 @@
 const puppeteerExtra = require('puppeteer-extra');
 const StealthPlugin  = require('puppeteer-extra-plugin-stealth');
 puppeteerExtra.use(StealthPlugin());
-const PNR = 'SEOBQV', ORIGIN = 'BSB', LASTNAME = 'SILVA';
+const PNR = 'SEOBQV', ORIGIN = 'REC', LASTNAME = 'SILVA';
 
 (async () => {
     const t0 = Date.now();

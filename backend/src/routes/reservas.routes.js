@@ -2244,8 +2244,14 @@ async function _executarGolLookup(jobId, pnr, origin, lastName) {
 
         const golUrl = `https://b2c.voegol.com.br/minhas-viagens/encontrar-viagem?codigoReserva=${pnr}&origem=${origin}${lastName ? '&sobrenome='+encodeURIComponent(lastName.toLowerCase()) : ''}`;
         console.log('[GolLookup] goto', elapsed());
-        await page.goto(golUrl, { waitUntil: 'domcontentloaded', timeout: 40000 }).catch(e => console.warn('[GolLookup] Nav:', e.message));
-        console.log('[GolLookup] domcontentloaded', elapsed());
+        await page.goto(golUrl, { waitUntil: 'networkidle2', timeout: 40000 }).catch(e => console.warn('[GolLookup] Nav:', e.message));
+        console.log('[GolLookup] networkidle2', elapsed());
+
+        // Tenta clicar no botão de busca se houver
+        try {
+            await page.click('button[type="submit"], button:contains("Buscar"), [data-test*="search"]').catch(() => {});
+            console.log('[GolLookup] clicou busca', elapsed());
+        } catch (e) { /* sem botão */ }
 
         // Aguarda pnrBnpl — com --js-flags=--max_old_space_size=256 chega em ~15s local
         await Promise.race([pnrPromise, new Promise(r => setTimeout(r, 55000))]);
