@@ -2221,23 +2221,25 @@ async function _executarGolLookup(jobId, pnr, origin, lastName) {
         // Captura pnrBnpl via response listener (página chama automaticamente com recaptcha)
         // pnrBnpl requer recaptcha token gerado pela página — não pode ser chamado manualmente
         let pnrJson = null;
+        let allUrls = [];
         const pnrPromise = new Promise(resolve => {
             page.on('response', async resp => {
                 const url = resp.url();
-                if (url.includes('gol-auth-api') || url.includes('pnrBnpl'))
+                allUrls.push(url.substring(0, 80));
+                if (url.includes('gol-auth-api') || url.includes('pnrBnpl') || url.includes('booking'))
                     console.log(`[GolLookup] ${elapsed()} ${url.substring(0,80)} HTTP${resp.status()}`);
                 if (!url.includes('pnrBnpl')) return;
                 try {
                     let txt = '';
                     try { txt = (await resp.buffer()).toString('utf8'); }
                     catch (_) { txt = await resp.text().catch(() => ''); }
-                    if (!txt || txt.length < 20) return;
+                    if (!txt || txt.length < 20) { console.warn('[GolLookup] pnrBnpl vazio/curto'); return; }
                     const json = JSON.parse(txt);
                     if (json?.success && json?.response?.pnrRetrieveResponse) {
                         pnrJson = json;
                         console.log('[GolLookup] pnrBnpl ✓', elapsed());
                         resolve(json);
-                    } else { console.warn('[GolLookup] pnrBnpl inválido:', txt.substring(0,100)); }
+                    } else { console.warn('[GolLookup] pnrBnpl payload inválido (success ou response.pnrRetrieveResponse ausente)'); }
                 } catch (e) { console.warn('[GolLookup] parse err:', e.message); }
             });
         });
@@ -2264,7 +2266,8 @@ async function _executarGolLookup(jobId, pnr, origin, lastName) {
         if (!pnrJson) {
             const motivo = isCf ? 'Cloudflare bloqueou o IP do servidor' : `pnrBnpl não capturado (título: "${pageTitle}") — verifique localizador, origem e sobrenome`;
             console.warn('[GolLookup] FALHOU:', motivo);
-            golJobs.set(jobId, { status: 'failed', error: motivo, pageTitle, createdAt: Date.now() });
+            console.warn('[GolLookup] URLs capturadas:', allUrls.slice(-20));
+            golJobs.set(jobId, { status: 'failed', error: motivo, pageTitle, urlsCapturadas: allUrls.slice(-20), createdAt: Date.now() });
             return;
         }
 
