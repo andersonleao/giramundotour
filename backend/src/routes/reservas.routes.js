@@ -2204,9 +2204,11 @@ async function _executarGolLookup(jobId, pnr, origin, lastName) {
                 '--disable-blink-features=AutomationControlled',
                 '--window-size=1280,720',
                 '--disable-extensions', '--disable-background-networking', '--disable-sync',
-                '--js-flags=--max_old_space_size=256',  // limita heap V8 → evita OOM 512MB Render
-                '--renderer-process-limit=1',            // único renderer process
-                '--enable-low-end-device-mode',          // modo baixa memória (reduziu 24s→15s local)
+                '--js-flags=--max_old_space_size=180',  // limita heap V8 do renderer → evita OOM
+                '--renderer-process-limit=1',
+                '--enable-low-end-device-mode',
+                '--disable-features=TranslateUI,BlinkGenPropertyTrees',
+                '--disable-ipc-flooding-protection',
             ]
         });
         console.log('[GolLookup] browser OK', elapsed());

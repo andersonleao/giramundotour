@@ -36,4 +36,4 @@ COPY frontend ./frontend
 
 EXPOSE 3000
 
-CMD ["node", "backend/src/server.js"]
+CMD ["node", "--max-old-space-size=256", "backend/src/server.js"]
