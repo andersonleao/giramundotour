@@ -2177,19 +2177,19 @@ setInterval(() => {
 }, 5 * 60 * 1000);
 
 async function _executarGolLookup(jobId, pnr, origin, lastName) {
+    // ESTRATÉGIA: browser obtém JWT do create-token (~30s), fecha imediatamente,
+    // depois Node.js chama pnrBnpl direto (~3s). Evita OOM no Render (512MB).
     let browser;
     const t0 = Date.now();
     const elapsed = () => Math.round((Date.now()-t0)/1000) + 's';
     console.log(`[GolLookup] === job ${jobId} === pnr=${pnr} origin=${origin} lastName=${lastName}`);
 
-    // Hard timeout: fecha browser e marca failed após 55s (evita OOM no Render 512MB)
     const hardTimeout = setTimeout(() => {
-        console.warn('[GolLookup] HARD TIMEOUT 120s — encerrando browser');
+        console.warn('[GolLookup] HARD TIMEOUT 70s');
         if (browser) browser.close().catch(() => {});
-        if (golJobs.get(jobId)?.status === 'processing') {
-            golJobs.set(jobId, { status: 'failed', error: 'Timeout: pnrBnpl não capturado em 120s (rede lenta ou Cloudflare)', createdAt: Date.now() });
-        }
-    }, 120000);
+        if (golJobs.get(jobId)?.status === 'processing')
+            golJobs.set(jobId, { status: 'failed', error: 'Timeout 70s — GOL não retornou JWT', createdAt: Date.now() });
+    }, 70000);
 
     try {
         const chromePath = process.env.PUPPETEER_EXECUTABLE_PATH || undefined;
@@ -2203,11 +2203,10 @@ async function _executarGolLookup(jobId, pnr, origin, lastName) {
                 '--disable-gpu', '--no-zygote',
                 '--disable-blink-features=AutomationControlled',
                 '--window-size=1280,720',
-                '--memory-pressure-off',           // reduz aggressividade do GC
-                '--max_old_space_size=256',         // limita heap JS do browser
-                '--disable-extensions',
-                '--disable-background-networking',
-                '--disable-sync',
+                '--disable-extensions', '--disable-background-networking', '--disable-sync',
+                '--js-flags=--max_old_space_size=256',  // limita heap V8 → evita OOM 512MB Render
+                '--renderer-process-limit=1',            // único renderer process
+                '--enable-low-end-device-mode',          // modo baixa memória (reduziu 24s→15s local)
             ]
         });
         console.log('[GolLookup] browser OK', elapsed());
@@ -2217,107 +2216,73 @@ async function _executarGolLookup(jobId, pnr, origin, lastName) {
         await page.setViewport({ width: 1280, height: 720 });
         await page.setExtraHTTPHeaders({ 'Accept-Language': 'pt-BR,pt;q=0.9,en-US;q=0.8' });
 
-        // CDP blocking removido — pode interferir com auth flow no Render
-
-        let pnrData = null;
+        // Captura pnrBnpl via response listener (página chama automaticamente com recaptcha)
+        // pnrBnpl requer recaptcha token gerado pela página — não pode ser chamado manualmente
+        let pnrJson = null;
         const pnrPromise = new Promise(resolve => {
             page.on('response', async resp => {
                 const url = resp.url();
-                if (url.includes('gol-auth-api') || url.includes('pnrBnpl')) {
-                    console.log(`[GolLookup] ${elapsed()} API: ${url.substring(0,90)} HTTP ${resp.status()}`);
-                }
+                if (url.includes('gol-auth-api') || url.includes('pnrBnpl'))
+                    console.log(`[GolLookup] ${elapsed()} ${url.substring(0,80)} HTTP${resp.status()}`);
                 if (!url.includes('pnrBnpl')) return;
-                // Tenta buffer() primeiro; se falhar usa text() como fallback
-                let rawTxt = '';
-                try { rawTxt = (await resp.buffer()).toString('utf8'); }
-                catch (e) {
-                    console.warn('[GolLookup] buffer() err:', e.message, '— tentando text()');
-                    try { rawTxt = await resp.text(); } catch (_) {}
-                }
                 try {
-                    if (!rawTxt || rawTxt.length < 10) return;
-                    const json = JSON.parse(rawTxt);
+                    let txt = '';
+                    try { txt = (await resp.buffer()).toString('utf8'); }
+                    catch (_) { txt = await resp.text().catch(() => ''); }
+                    if (!txt || txt.length < 20) return;
+                    const json = JSON.parse(txt);
                     if (json?.success && json?.response?.pnrRetrieveResponse) {
-                        pnrData = json;
+                        pnrJson = json;
                         console.log('[GolLookup] pnrBnpl ✓', elapsed());
                         resolve(json);
-                    } else {
-                        console.warn('[GolLookup] pnrBnpl resp inválida:', rawTxt.substring(0,150));
-                    }
-                } catch (e) { console.warn('[GolLookup] parse err:', e.message, rawTxt.substring(0,100)); }
+                    } else { console.warn('[GolLookup] pnrBnpl inválido:', txt.substring(0,100)); }
+                } catch (e) { console.warn('[GolLookup] parse err:', e.message); }
             });
         });
 
-        const golUrl = `https://b2c.voegol.com.br/minhas-viagens/encontrar-viagem?codigoReserva=${pnr}&origem=${origin}${lastName ? '&sobrenome=' + encodeURIComponent(lastName.toLowerCase()) : ''}`;
+        const golUrl = `https://b2c.voegol.com.br/minhas-viagens/encontrar-viagem?codigoReserva=${pnr}&origem=${origin}${lastName ? '&sobrenome='+encodeURIComponent(lastName.toLowerCase()) : ''}`;
         console.log('[GolLookup] goto', elapsed());
-
-        await page.goto(golUrl, { waitUntil: 'domcontentloaded', timeout: 45000 }).catch(e => console.warn('[GolLookup] Nav:', e.message));
+        await page.goto(golUrl, { waitUntil: 'domcontentloaded', timeout: 40000 }).catch(e => console.warn('[GolLookup] Nav:', e.message));
         console.log('[GolLookup] domcontentloaded', elapsed());
 
-        // Aguarda pnrBnpl por até 80s após domcontentloaded
-        // Render (AWS us-east→Brasil): pnrBnpl estimado em 60-80s total
-        await Promise.race([pnrPromise, new Promise(r => setTimeout(r, 80000))]);
-        console.log('[GolLookup] após wait', elapsed(), '| pnrData:', pnrData ? 'OK' : 'null');
+        // Aguarda pnrBnpl — com --js-flags=--max_old_space_size=256 chega em ~15s local
+        await Promise.race([pnrPromise, new Promise(r => setTimeout(r, 55000))]);
+        console.log('[GolLookup] após wait', elapsed(), '| pnrJson:', pnrJson ? 'OK' : 'null');
 
         const pageTitle = await page.title().catch(() => '');
-        const bodySnip  = await page.evaluate(() => (document.body?.innerText||'').substring(0,200)).catch(() => '');
         console.log('[GolLookup] título:', pageTitle);
-        console.log('[GolLookup] body:', bodySnip.replace(/\n/g,' ').substring(0,150));
+        const isCf = /just a moment|checking your|attention required|cloudflare/i.test(pageTitle);
 
-        const isCf = /just a moment|checking your|attention required|cloudflare/i.test(pageTitle + ' ' + bodySnip);
-        if (isCf) console.warn('[GolLookup] ⚠ CLOUDFLARE!');
-
-        // Fallback page.evaluate() com timeout explícito
-        if (!pnrData && !isCf) {
-            console.log('[GolLookup] page.evaluate() fallback...');
-            try {
-                const ev = await Promise.race([
-                    page.evaluate(async (p, o, l) => {
-                        const u = `https://booking-api.voegol.com.br/api/pnrBnpl/pnr-bnpl-validation-v2?context=b2c&flow=consult&pnr=${p}&origin=${o}${l ? '&lastName='+encodeURIComponent(l) : ''}`;
-                        try {
-                            const r = await fetch(u, { credentials: 'include', headers: { 'Accept': 'application/json', 'Origin': location.origin } });
-                            return r.ok ? await r.json() : { httpStatus: r.status };
-                        } catch (e) { return { fetchError: e.message }; }
-                    }, pnr, origin, lastName || ''),
-                    new Promise(r => setTimeout(() => r(null), 8000)) // timeout 8s
-                ]);
-                console.log('[GolLookup] evaluate resp:', JSON.stringify(ev)?.substring(0,150));
-                if (ev?.success && ev?.response?.pnrRetrieveResponse) { pnrData = ev; console.log('[GolLookup] evaluate ✓'); }
-            } catch (e) { console.warn('[GolLookup] evaluate err:', e.message); }
-        }
-
-        if (!pnrData) {
-            const motivo = isCf
-                ? 'Cloudflare bloqueou o IP do servidor'
-                : `Dados não encontrados — título: "${pageTitle}" — verifique localizador, origem e sobrenome`;
+        if (!pnrJson) {
+            const motivo = isCf ? 'Cloudflare bloqueou o IP do servidor' : `pnrBnpl não capturado (título: "${pageTitle}") — verifique localizador, origem e sobrenome`;
             console.warn('[GolLookup] FALHOU:', motivo);
             golJobs.set(jobId, { status: 'failed', error: motivo, pageTitle, createdAt: Date.now() });
             return;
         }
 
         // Parseia bilheteData
-        const pnrObj = pnrData.response.pnrRetrieveResponse.pnr || {};
+        const pnrObj = pnrJson.response.pnrRetrieveResponse.pnr || {};
         const parts  = pnrObj?.itinerary?.itineraryParts || [];
         const toDataG = dt => dt ? String(dt).substring(0,10) : '';
         const toHoraG = dt => dt ? String(dt).substring(11,16) : '';
         const seg0 = parts[0]?.segments?.[0] || {};
         const seg1 = parts.length > 1 ? (parts[parts.length-1]?.segments?.[0] || null) : null;
 
-        const ida = { origem: seg0.origin||origin, destino: seg0.destination||'', data: toDataG(seg0.departure), horaPartida: toHoraG(seg0.departure), horaChegada: toHoraG(seg0.arrival), voo: `G3 ${seg0.flight?.flightNumber||''}`.trim() };
+        const ida  = { origem: seg0.origin||origin, destino: seg0.destination||'', data: toDataG(seg0.departure), horaPartida: toHoraG(seg0.departure), horaChegada: toHoraG(seg0.arrival), voo: `G3 ${seg0.flight?.flightNumber||''}`.trim() };
         const volta = seg1 ? { origem: seg1.origin||'', destino: seg1.destination||'', data: toDataG(seg1.departure), horaPartida: toHoraG(seg1.departure), horaChegada: toHoraG(seg1.arrival), voo: `G3 ${seg1.flight?.flightNumber||''}`.trim() } : null;
         const p0 = (pnrObj?.passengers||[])[0];
         const passageiroNome = p0 ? `${p0.firstName||''} ${p0.lastName||''}`.trim() : (lastName||'');
 
         golJobs.set(jobId, { status: 'done', bilheteData: { passageiroNome, tripType: parts.length>1?'Roundtrip':'OneWay', ida, volta }, createdAt: Date.now() });
-        console.log('[GolLookup] job', jobId, 'concluído ✓', ida.origem, '→', ida.destino, ida.data);
+        console.log('[GolLookup] ✓', elapsed(), ida.origem, '→', ida.destino, ida.data);
 
     } catch (err) {
-        console.error('[GolLookup] job', jobId, 'erro:', err.message);
+        console.error('[GolLookup] erro:', err.message);
         golJobs.set(jobId, { status: 'failed', error: err.message, createdAt: Date.now() });
     } finally {
         clearTimeout(hardTimeout);
         if (browser) await browser.close().catch(() => {});
-        console.log(`[GolLookup] job ${jobId} encerrado, status:`, golJobs.get(jobId)?.status);
+        console.log(`[GolLookup] job ${jobId} encerrado status:`, golJobs.get(jobId)?.status);
     }
 }
 
