@@ -2184,12 +2184,12 @@ async function _executarGolLookup(jobId, pnr, origin, lastName) {
 
     // Hard timeout: fecha browser e marca failed após 55s (evita OOM no Render 512MB)
     const hardTimeout = setTimeout(() => {
-        console.warn('[GolLookup] HARD TIMEOUT 90s — encerrando browser');
+        console.warn('[GolLookup] HARD TIMEOUT 120s — encerrando browser');
         if (browser) browser.close().catch(() => {});
         if (golJobs.get(jobId)?.status === 'processing') {
-            golJobs.set(jobId, { status: 'failed', error: 'Timeout: pnrBnpl não capturado em 90s (rede lenta ou Cloudflare)', createdAt: Date.now() });
+            golJobs.set(jobId, { status: 'failed', error: 'Timeout: pnrBnpl não capturado em 120s (rede lenta ou Cloudflare)', createdAt: Date.now() });
         }
-    }, 90000);
+    }, 120000);
 
     try {
         const chromePath = process.env.PUPPETEER_EXECUTABLE_PATH || undefined;
@@ -2217,19 +2217,7 @@ async function _executarGolLookup(jobId, pnr, origin, lastName) {
         await page.setViewport({ width: 1280, height: 720 });
         await page.setExtraHTTPHeaders({ 'Accept-Language': 'pt-BR,pt;q=0.9,en-US;q=0.8' });
 
-        // CDP: bloqueia imagens/fonts/trackers sem usar setRequestInterception
-        // (setRequestInterception interfere no resp.buffer())
-        try {
-            const cdp = await page.target().createCDPSession();
-            await cdp.send('Network.setBlockedURLs', { urls: [
-                '*.png', '*.jpg', '*.jpeg', '*.gif', '*.svg', '*.ico', '*.webp',
-                '*.woff', '*.woff2', '*.ttf', '*.otf',
-                '*google-analytics*', '*googletagmanager*', '*criteo*',
-                '*pinterest*', '*qualtrics*', '*oracleinfinity*',
-                '*datadoghq*', '*doubleclick*', '*facebook*', '*hotjar*',
-            ] });
-            console.log('[GolLookup] CDP resource blocking ativo');
-        } catch (e) { console.warn('[GolLookup] CDP block err:', e.message); }
+        // CDP blocking removido — pode interferir com auth flow no Render
 
         let pnrData = null;
         const pnrPromise = new Promise(resolve => {
@@ -2263,12 +2251,12 @@ async function _executarGolLookup(jobId, pnr, origin, lastName) {
         const golUrl = `https://b2c.voegol.com.br/minhas-viagens/encontrar-viagem?codigoReserva=${pnr}&origem=${origin}${lastName ? '&sobrenome=' + encodeURIComponent(lastName.toLowerCase()) : ''}`;
         console.log('[GolLookup] goto', elapsed());
 
-        await page.goto(golUrl, { waitUntil: 'domcontentloaded', timeout: 35000 }).catch(e => console.warn('[GolLookup] Nav:', e.message));
+        await page.goto(golUrl, { waitUntil: 'domcontentloaded', timeout: 45000 }).catch(e => console.warn('[GolLookup] Nav:', e.message));
         console.log('[GolLookup] domcontentloaded', elapsed());
 
-        // Aguarda pnrBnpl por até 50s após domcontentloaded
-        // (Render = AWS→Brasil: mais latência que local, pnrBnpl pode levar 40-50s)
-        await Promise.race([pnrPromise, new Promise(r => setTimeout(r, 50000))]);
+        // Aguarda pnrBnpl por até 80s após domcontentloaded
+        // Render (AWS us-east→Brasil): pnrBnpl estimado em 60-80s total
+        await Promise.race([pnrPromise, new Promise(r => setTimeout(r, 80000))]);
         console.log('[GolLookup] após wait', elapsed(), '| pnrData:', pnrData ? 'OK' : 'null');
 
         const pageTitle = await page.title().catch(() => '');
