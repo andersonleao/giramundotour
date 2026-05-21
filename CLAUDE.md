@@ -90,4 +90,4 @@ Blue rect (y=0→45), rounded logo rect, "GiraMundoTour" text + slogan, contact 
 
 ### Deploy
 
-Server: Oracle Cloud (Ubuntu). Deploy via `tar + scp`. See `memory/reference_server.md` for IP, SSH key, and deploy commands.
+Server: **Render** (https://giramundotour.onrender.com). Deploy automático via `git push origin main` — Render detecta e faz deploy em ~5 min. Banco: Neon PostgreSQL. Ver `memory/reference_server.md` para detalhes de conexão.

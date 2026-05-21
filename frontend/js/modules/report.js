@@ -1759,6 +1759,390 @@ const ReportModule = {
         doc.save(nomeArquivo);
 
         debugLog('ReportModule: Relatório gerado', nomeArquivo);
+    },
+
+    /**
+     * Gera PDF de fatura/invoice formal com todos os dados da empresa.
+     * @param {object} bilhete      - Dados do bilhete
+     * @param {object} cliente      - Dados completos do cliente (com cpf/cnpj/endereco)
+     * @param {object} opcoes       - { formaPagamento, observacao }
+     */
+    async gerarInvoicePDF(bilhete, cliente, opcoes = {}) {
+        if (typeof jspdf === 'undefined' || typeof jspdf.jsPDF === 'undefined') {
+            alert('Biblioteca jsPDF não carregada. Verifique a conexão com a internet.');
+            return;
+        }
+
+        const logoBase64 = await this.carregarLogo();
+        const { jsPDF } = jspdf;
+        const doc = new jsPDF();
+
+        const pageWidth    = doc.internal.pageSize.getWidth();
+        const pageHeight   = doc.internal.pageSize.getHeight();
+        const margin       = 20;
+        const contentWidth = pageWidth - margin * 2;
+        let y = margin;
+
+        const primaryColor = [26, 54, 93];
+        const primaryLight = [66, 153, 225];
+        const borderColor  = [210, 215, 225];
+        const textDark     = [33, 37, 41];
+        const textMuted    = [120, 130, 140];
+        const greenColor   = [27, 94, 32];
+        const greenBg      = [232, 245, 233];
+        const rowH         = 8;
+
+        const checkPage = (needed) => {
+            if (y + needed > pageHeight - 28) { doc.addPage(); y = margin; }
+        };
+
+        // ── CABEÇALHO ────────────────────────────────────────────────
+        doc.setFillColor(...primaryColor);
+        doc.rect(0, 0, pageWidth, 45, 'F');
+
+        if (logoBase64) {
+            try {
+                doc.setFillColor(255, 255, 255);
+                doc.roundedRect(margin + 1, 6, 33, 33, 4, 4, 'F');
+                doc.addImage(logoBase64, 'PNG', margin + 2, 7, 31, 31);
+            } catch(e) {}
+        }
+
+        const textoX = logoBase64 ? margin + 40 : margin;
+        doc.setTextColor(255, 255, 255);
+        doc.setFontSize(24); doc.setFont('helvetica', 'bold');
+        doc.text('GiraMundoTour', textoX, 25);
+        doc.setFontSize(10); doc.setFont('helvetica', 'normal');
+        doc.text(CONFIG.empresa.slogan, textoX, 33);
+
+        const contactX = pageWidth - margin;
+        let contactY   = 12;
+        const iconSize = 4;
+        const wppIcon  = this._gerarIconeWhatsApp();
+        const igIcon   = this._gerarIconeInstagram();
+
+        doc.setFontSize(8); doc.setFont('helvetica', 'normal'); doc.setTextColor(255, 255, 255);
+        doc.text(CONFIG.empresa.email, contactX, contactY, { align: 'right' }); contactY += 5.5;
+
+        const tel1Text  = CONFIG.empresa.telefone;
+        const tel1Width = doc.getTextWidth(tel1Text);
+        doc.text(tel1Text, contactX, contactY, { align: 'right' });
+        try { doc.addImage(wppIcon, 'PNG', contactX - tel1Width - iconSize - 1.5, contactY - iconSize + 0.8, iconSize, iconSize); } catch(e) {}
+        contactY += 4.5;
+
+        const tel2Text  = CONFIG.empresa.telefone2;
+        const tel2Width = doc.getTextWidth(tel2Text);
+        doc.setTextColor(255, 255, 255);
+        doc.text(tel2Text, contactX, contactY, { align: 'right' });
+        try { doc.addImage(wppIcon, 'PNG', contactX - tel2Width - iconSize - 1.5, contactY - iconSize + 0.8, iconSize, iconSize); } catch(e) {}
+        contactY += 5.5;
+
+        const igText  = CONFIG.empresa.instagram;
+        const igWidth = doc.getTextWidth(igText);
+        doc.setTextColor(255, 255, 255);
+        doc.text(igText, contactX, contactY, { align: 'right' });
+        try { doc.addImage(igIcon, 'PNG', contactX - igWidth - iconSize - 1.5, contactY - iconSize + 0.8, iconSize, iconSize); } catch(e) {}
+
+        y = 55;
+
+        // ── TÍTULO DA FATURA ─────────────────────────────────────────
+        const numeroInvoice = 'INV-' + new Date().getFullYear() + '-' +
+            String(Math.floor(Math.random() * 9000) + 1000);
+        const dataEmissao  = Formatter.date(new Date());
+
+        doc.setTextColor(...primaryColor);
+        doc.setFontSize(20); doc.setFont('helvetica', 'bold');
+        doc.text('FATURA / INVOICE', margin, y);
+
+        doc.setFontSize(9); doc.setFont('helvetica', 'normal'); doc.setTextColor(...textMuted);
+        doc.text(`Nº: ${numeroInvoice}`, pageWidth - margin, y - 4, { align: 'right' });
+        doc.text(`Emissão: ${dataEmissao}`, pageWidth - margin, y + 2, { align: 'right' });
+        if (bilhete.codigoReserva) {
+            doc.text(`Reserva: ${bilhete.codigoReserva}`, pageWidth - margin, y + 8, { align: 'right' });
+        }
+
+        y += 16;
+
+        // ── LINHA DIVISÓRIA ──────────────────────────────────────────
+        doc.setDrawColor(...primaryLight); doc.setLineWidth(0.5);
+        doc.line(margin, y, pageWidth - margin, y);
+        y += 8;
+
+        // ── EMITENTE | TOMADOR (2 colunas) ──────────────────────────
+        const halfW = (contentWidth - 8) / 2;
+        const col2X = margin + halfW + 8;
+        const boxStartY = y;
+
+        // Box emitente
+        doc.setFillColor(245, 248, 255);
+        doc.setDrawColor(...primaryLight); doc.setLineWidth(0.3);
+        doc.roundedRect(margin, y - 3, halfW, 52, 2, 2, 'FD');
+
+        doc.setFontSize(8); doc.setFont('helvetica', 'bold'); doc.setTextColor(...primaryLight);
+        doc.text('PRESTADOR DE SERVIÇOS', margin + 4, y + 3);
+        y += 8;
+
+        doc.setFontSize(9); doc.setFont('helvetica', 'bold'); doc.setTextColor(...primaryColor);
+        doc.text(CONFIG.empresa.nome, margin + 4, y); y += 6;
+
+        doc.setFontSize(8); doc.setFont('helvetica', 'normal'); doc.setTextColor(...textDark);
+        doc.text(`CNPJ: ${CONFIG.empresa.cnpj}`, margin + 4, y); y += 5;
+        doc.text(CONFIG.empresa.endereco, margin + 4, y); y += 5;
+        doc.text(`Tel: ${CONFIG.empresa.telefone}  |  ${CONFIG.empresa.telefone2}`, margin + 4, y); y += 5;
+        doc.text(`E-mail: ${CONFIG.empresa.email}`, margin + 4, y); y += 5;
+        if (CONFIG.empresa.site) {
+            doc.text(`Site: ${CONFIG.empresa.site}`, margin + 4, y);
+        }
+
+        // Box tomador
+        y = boxStartY;
+        doc.setFillColor(252, 252, 252);
+        doc.setDrawColor(...borderColor); doc.setLineWidth(0.3);
+        doc.roundedRect(col2X, y - 3, halfW, 52, 2, 2, 'FD');
+
+        doc.setFontSize(8); doc.setFont('helvetica', 'bold'); doc.setTextColor(...textMuted);
+        doc.text('TOMADOR / CLIENTE', col2X + 4, y + 3);
+        y += 8;
+
+        const nomeCliente = cliente?.nome || bilhete.clienteNome || 'N/A';
+        const cpfCliente  = cliente?.cpf  ? Formatter.cpf(cliente.cpf)   : null;
+        const cnpjCliente = cliente?.cnpj ? Formatter.cnpj(cliente.cnpj) : null;
+        const docCliente  = cnpjCliente || cpfCliente || null;
+
+        doc.setFontSize(9); doc.setFont('helvetica', 'bold'); doc.setTextColor(...textDark);
+        doc.text(nomeCliente, col2X + 4, y); y += 6;
+
+        doc.setFontSize(8); doc.setFont('helvetica', 'normal');
+        if (docCliente) {
+            doc.text(`${cnpjCliente ? 'CNPJ' : 'CPF'}: ${docCliente}`, col2X + 4, y); y += 5;
+        }
+        if (cliente?.rg) {
+            doc.text(`RG: ${cliente.rg}`, col2X + 4, y); y += 5;
+        }
+        if (cliente?.telefone || bilhete.clienteTelefone) {
+            doc.text(`Tel: ${Formatter.phone(cliente?.telefone || bilhete.clienteTelefone)}`, col2X + 4, y); y += 5;
+        }
+        if (cliente?.email || bilhete.clienteEmail) {
+            doc.text(`E-mail: ${cliente?.email || bilhete.clienteEmail}`, col2X + 4, y); y += 5;
+        }
+        if (cliente?.endereco) {
+            const endStr = [cliente.endereco, cliente.cidade, cliente.estado].filter(Boolean).join(', ');
+            doc.text(endStr, col2X + 4, y);
+        }
+
+        y = boxStartY + 52 + 10;
+
+        // ── PASSAGEIROS ──────────────────────────────────────────────
+        const nomesPassageiros = (() => {
+            const n = bilhete.passageiroNome || '';
+            const lista = n.includes(',') ? n.split(',').map(s => s.trim()).filter(Boolean) : (n ? [n] : []);
+            return lista.length > 0 ? lista : ['N/A'];
+        })();
+        const qtdPax = nomesPassageiros.length;
+
+        checkPage(14 + qtdPax * 6);
+        doc.setFontSize(9); doc.setFont('helvetica', 'bold'); doc.setTextColor(...primaryColor);
+        doc.text(`PASSAGEIROS (${qtdPax})`, margin, y); y += 6;
+
+        doc.setFontSize(8.5); doc.setFont('helvetica', 'normal'); doc.setTextColor(...textDark);
+        nomesPassageiros.forEach((nome, i) => {
+            doc.text(`${i + 1}.  ${nome}`, margin + 4, y); y += 5.5;
+        });
+        y += 6;
+
+        // ── TABELA DE SERVIÇOS ───────────────────────────────────────
+        checkPage(60);
+
+        doc.setFontSize(11); doc.setFont('helvetica', 'bold'); doc.setTextColor(...primaryColor);
+        doc.text('DESCRIÇÃO DOS SERVIÇOS', margin, y); y += 8;
+
+        // Montar itens da fatura
+        const tarifa        = parseFloat(bilhete.tarifa)       || 0;
+        const taxaEmbarque  = parseFloat(bilhete.taxaEmbarque) || 0;
+        const valorTotal    = parseFloat(bilhete.valorVenda)   || 0;
+        const somaConhecida = tarifa + taxaEmbarque;
+        const diff          = Math.round((valorTotal - somaConhecida) * 100) / 100;
+
+        const companhiaNome = bilhete.companhiaNome || bilhete.companhia || '';
+        const numeroVoo     = bilhete.numeroVoo     || '';
+        const origemLabel   = bilhete.origem  || '';
+        const destinoLabel  = bilhete.destino || '';
+        const dataIda       = bilhete.dataIda   ? Formatter.date(bilhete.dataIda)   : '';
+        const dataVolta     = bilhete.dataVolta ? Formatter.date(bilhete.dataVolta) : '';
+        const rotaStr       = [origemLabel, destinoLabel].filter(Boolean).join(' → ');
+        const datasStr      = dataVolta ? `${dataIda} — ${dataVolta}` : dataIda;
+
+        const descVoo = [
+            `Passagem Aérea — ${companhiaNome}${numeroVoo ? ' ' + numeroVoo : ''}`,
+            rotaStr ? `Rota: ${rotaStr}` : '',
+            datasStr ? `Data${dataVolta ? 's' : ''}: ${datasStr}` : '',
+            bilhete.cabine ? `Cabine: ${bilhete.cabine}` : ''
+        ].filter(Boolean);
+
+        const itens = [];
+        if (tarifa > 0) {
+            itens.push({ desc: descVoo, qtd: qtdPax, unit: tarifa / qtdPax, total: tarifa });
+        } else if (tarifa === 0 && taxaEmbarque === 0 && valorTotal > 0) {
+            itens.push({ desc: descVoo, qtd: qtdPax, unit: valorTotal / qtdPax, total: valorTotal });
+        }
+        if (taxaEmbarque > 0) {
+            itens.push({ desc: ['Taxa de Embarque Aeroportuária'], qtd: qtdPax, unit: taxaEmbarque / qtdPax, total: taxaEmbarque });
+        }
+        if (bilhete.bagagem && bilhete.bagagem.trim()) {
+            const pesosMatch = bilhete.bagagem.match(/\d+\s*kg/gi) || [];
+            const descBag = pesosMatch.length > 0
+                ? `Bagagem Despachada — ${pesosMatch.join(', ')}`
+                : `Bagagem — ${bilhete.bagagem}`;
+            itens.push({ desc: [descBag], qtd: 1, unit: null, total: null, info: true });
+        }
+        if (diff > 0.01) {
+            itens.push({ desc: ['Serviços / Taxas Agência'], qtd: 1, unit: diff, total: diff });
+        }
+
+        // Cabeçalho da tabela
+        const colW = [90, 14, 38, 28];
+        const tableW = colW.reduce((a, b) => a + b, 0);
+        const headers = ['Descrição', 'Qtd', 'Valor Unit.', 'Total'];
+        let tx = margin;
+        headers.forEach((h, i) => {
+            doc.setFillColor(...primaryColor);
+            doc.rect(tx, y, colW[i], rowH, 'F');
+            doc.setTextColor(255, 255, 255); doc.setFont('helvetica', 'bold'); doc.setFontSize(8);
+            const align = i > 0 ? 'right' : 'left';
+            const px = i > 0 ? tx + colW[i] - 2 : tx + 2;
+            doc.text(h, px, y + rowH / 2 + 1.5, { align });
+            tx += colW[i];
+        });
+        y += rowH;
+
+        // Linhas de itens
+        itens.forEach((item, idx) => {
+            const linhas = item.desc;
+            const itemH = Math.max(rowH, linhas.length * 5 + 3);
+            checkPage(itemH + 2);
+
+            const bg = idx % 2 === 0 ? 248 : 255;
+            doc.setFillColor(bg, bg, bg);
+            tx = margin;
+            colW.forEach(w => { doc.setDrawColor(...borderColor); doc.setLineWidth(0.2); doc.rect(tx, y, w, itemH, 'FD'); tx += w; });
+
+            // Descrição (pode ter múltiplas linhas)
+            linhas.forEach((linha, li) => {
+                const isFirstLine = li === 0;
+                doc.setFont('helvetica', isFirstLine && !item.info ? 'bold' : 'normal');
+                doc.setFontSize(isFirstLine ? 8 : 7);
+                if (isFirstLine) { doc.setTextColor(...textDark); } else { doc.setTextColor(...textMuted); }
+                doc.text(linha, margin + 2, y + 5 + li * 5);
+            });
+
+            // Qtd
+            if (!item.info) {
+                doc.setFont('helvetica', 'normal'); doc.setFontSize(8); doc.setTextColor(...textDark);
+                doc.text(String(item.qtd), margin + colW[0] + colW[1] - 2, y + itemH / 2 + 1.5, { align: 'right' });
+                // Valor unit
+                doc.text(item.unit != null ? Formatter.currency(item.unit) : '-',
+                    margin + colW[0] + colW[1] + colW[2] - 2, y + itemH / 2 + 1.5, { align: 'right' });
+                // Total
+                doc.setFont('helvetica', 'bold');
+                doc.text(item.total != null ? Formatter.currency(item.total) : '-',
+                    margin + tableW - 2, y + itemH / 2 + 1.5, { align: 'right' });
+            }
+            y += itemH;
+        });
+
+        // ── TOTAIS ───────────────────────────────────────────────────
+        y += 4;
+        checkPage(30);
+
+        const totaisX    = margin + colW[0] + colW[1];
+        const totaisW    = colW[2] + colW[3];
+        const totalLabel = qtdPax > 1 ? `TOTAL  (${qtdPax} passageiros)` : 'TOTAL';
+
+        doc.setFillColor(230, 240, 255);
+        doc.setDrawColor(...primaryLight); doc.setLineWidth(0.4);
+        doc.rect(totaisX, y, totaisW, rowH + 2, 'FD');
+        doc.setFont('helvetica', 'bold'); doc.setFontSize(10); doc.setTextColor(...primaryColor);
+        doc.text(totalLabel, margin + 4, y + (rowH + 2) / 2 + 2);
+        doc.text(Formatter.currency(valorTotal), margin + tableW - 2, y + (rowH + 2) / 2 + 2, { align: 'right' });
+        y += rowH + 2 + 10;
+
+        // ── PAGAMENTO ────────────────────────────────────────────────
+        if (opcoes.formaPagamento) {
+            checkPage(20);
+            doc.setFontSize(10); doc.setFont('helvetica', 'bold'); doc.setTextColor(...primaryColor);
+            doc.text('PAGAMENTO', margin, y); y += 7;
+
+            doc.setFillColor(...greenBg);
+            doc.setDrawColor(56, 161, 105); doc.setLineWidth(0.3);
+            doc.roundedRect(margin, y - 3, contentWidth, 10, 2, 2, 'FD');
+            doc.setFontSize(9); doc.setFont('helvetica', 'bold'); doc.setTextColor(...greenColor);
+            doc.text(`Forma de Pagamento:  ${opcoes.formaPagamento}`, margin + 5, y + 4);
+            if (opcoes.observacao) {
+                doc.setFont('helvetica', 'italic');
+                doc.text(`Obs: ${opcoes.observacao}`, pageWidth - margin - 5, y + 4, { align: 'right' });
+            }
+            y += 16;
+        }
+
+        // ── DECLARAÇÃO ───────────────────────────────────────────────
+        checkPage(40);
+
+        const declaracao =
+            `Declaro que a ${CONFIG.empresa.nome}, CNPJ ${CONFIG.empresa.cnpj}, prestou serviços de agenciamento de viagens ` +
+            `a ${nomeCliente}${docCliente ? ` (${cnpjCliente ? 'CNPJ' : 'CPF'}: ${docCliente})` : ''}, ` +
+            `perfazendo o valor total de ${Formatter.currency(valorTotal)}, ` +
+            `conforme reserva ${bilhete.codigoReserva || numeroInvoice}` +
+            (opcoes.formaPagamento ? `, pago via ${opcoes.formaPagamento}` : '') + '.';
+
+        const declLines = doc.splitTextToSize(declaracao, contentWidth - 10);
+        const declH     = declLines.length * 5 + 12;
+
+        doc.setFillColor(252, 252, 252);
+        doc.setDrawColor(...borderColor); doc.setLineWidth(0.3);
+        doc.roundedRect(margin, y - 3, contentWidth, declH, 2, 2, 'FD');
+        doc.setFontSize(8.5); doc.setFont('helvetica', 'italic'); doc.setTextColor(80, 80, 80);
+        declLines.forEach((line, i) => { doc.text(line, margin + 5, y + 4 + i * 5); });
+        y += declH + 12;
+
+        // ── ASSINATURAS ──────────────────────────────────────────────
+        checkPage(28);
+
+        const sigW = (contentWidth - 20) / 2;
+        doc.setDrawColor(120, 120, 120); doc.setLineWidth(0.4);
+        doc.line(margin, y, margin + sigW, y);
+        doc.line(margin + sigW + 20, y, margin + contentWidth, y);
+
+        y += 4;
+        doc.setFontSize(8); doc.setFont('helvetica', 'normal'); doc.setTextColor(...textMuted);
+        doc.text(CONFIG.empresa.nome, margin + sigW / 2, y, { align: 'center' });
+        doc.text(nomeCliente, margin + sigW + 20 + sigW / 2, y, { align: 'center' });
+        y += 4;
+        doc.setFontSize(7.5);
+        doc.text(`CNPJ: ${CONFIG.empresa.cnpj}`, margin + sigW / 2, y, { align: 'center' });
+        doc.text('Cliente', margin + sigW + 20 + sigW / 2, y, { align: 'center' });
+
+        // ── RODAPÉ em todas as páginas ────────────────────────────────
+        const totalPages = doc.internal.getNumberOfPages();
+        for (let p = 1; p <= totalPages; p++) {
+            doc.setPage(p);
+            const footerY = pageHeight - 20;
+            doc.setDrawColor(...primaryLight); doc.setLineWidth(0.5);
+            doc.line(margin, footerY, pageWidth - margin, footerY);
+            doc.setFontSize(8); doc.setFont('helvetica', 'bold'); doc.setTextColor(60, 60, 60);
+            doc.text(CONFIG.empresa.nome, margin, footerY + 5);
+            doc.setFont('helvetica', 'normal'); doc.setTextColor(100, 100, 100);
+            doc.text('CNPJ: ' + CONFIG.empresa.cnpj, pageWidth - margin, footerY + 5, { align: 'right' });
+            doc.setFontSize(7);
+            doc.text(
+                CONFIG.empresa.email + '  |  ' + CONFIG.empresa.telefone + '  |  ' +
+                CONFIG.empresa.telefone2 + '  |  ' + CONFIG.empresa.instagram,
+                pageWidth / 2, footerY + 10, { align: 'center' }
+            );
+        }
+
+        const nomeArq = `Invoice_${bilhete.codigoReserva || numeroInvoice}_GiraMundoTour.pdf`;
+        doc.save(nomeArq);
+        debugLog('ReportModule: Invoice PDF gerado', nomeArq);
     }
 };
 

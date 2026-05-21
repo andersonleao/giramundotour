@@ -658,6 +658,10 @@ const TicketsModule = {
                                     title="Gerar Recibo de Pagamento">
                                 <i class="bi bi-receipt"></i>
                             </button>
+                            <button class="btn btn-outline-warning" onclick="TicketsModule.gerarInvoice('${bilhete.id}')"
+                                    title="Emitir Fatura / Invoice">
+                                <i class="bi bi-file-earmark-text"></i>
+                            </button>
                             <button class="btn btn-outline-primary" onclick="TicketsModule.verBilhete('${bilhete.id}')"
                                     title="Visualizar">
                                 <i class="bi bi-eye"></i>
@@ -2399,6 +2403,104 @@ const TicketsModule = {
     },
 
     /**
+     * Abre modal para emissão de fatura/invoice formal
+     */
+    gerarInvoice(id) {
+        const bilhete = this._bilhetes.find(b => b.id === id);
+        if (!bilhete) return;
+
+        document.getElementById('modalInvoice')?.remove();
+
+        const nomeCliente = bilhete.clienteNome || 'Cliente';
+        const valor       = bilhete.valorVenda ? Formatter.currency(bilhete.valorVenda) : 'R$ 0,00';
+        const nomePax     = bilhete.passageiroNome || '';
+        const qtdPax      = nomePax.includes(',') ? nomePax.split(',').filter(n => n.trim()).length : 1;
+
+        const modalHtml = `
+            <div class="modal fade" id="modalInvoice" tabindex="-1">
+                <div class="modal-dialog modal-md">
+                    <div class="modal-content">
+                        <div class="modal-header" style="background: linear-gradient(135deg, #1a365d, #2b6cb0); color: #fff;">
+                            <h5 class="modal-title">
+                                <i class="bi bi-file-earmark-text me-2"></i>Emitir Fatura / Invoice
+                            </h5>
+                            <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+                        </div>
+                        <div class="modal-body">
+                            <div class="alert alert-info py-2 mb-3">
+                                <i class="bi bi-info-circle me-1"></i>
+                                <strong>${nomeCliente}</strong> — ${qtdPax} passageiro${qtdPax > 1 ? 's' : ''}
+                                &nbsp;|&nbsp; Total: <strong>${valor}</strong>
+                            </div>
+                            <div class="mb-3">
+                                <label class="form-label fw-semibold">Forma de Pagamento <span class="text-danger">*</span></label>
+                                <select class="form-select" id="invoiceFormaPagamento">
+                                    <option value="">Selecione...</option>
+                                    <option value="Dinheiro">Dinheiro</option>
+                                    <option value="PIX">PIX</option>
+                                    <option value="Cartão de Crédito">Cartão de Crédito</option>
+                                    <option value="Cartão de Débito">Cartão de Débito</option>
+                                    <option value="Transferência Bancária">Transferência Bancária</option>
+                                    <option value="Boleto Bancário">Boleto Bancário</option>
+                                    <option value="Cheque">Cheque</option>
+                                </select>
+                                <div class="invalid-feedback">Selecione a forma de pagamento.</div>
+                            </div>
+                            <div class="mb-2">
+                                <label class="form-label fw-semibold">Observação <small class="text-muted">(opcional)</small></label>
+                                <input type="text" class="form-control" id="invoiceObservacao"
+                                       placeholder="Ex: Pago em 2x sem juros">
+                            </div>
+                        </div>
+                        <div class="modal-footer">
+                            <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancelar</button>
+                            <button type="button" class="btn btn-warning text-dark fw-semibold"
+                                    onclick="TicketsModule._confirmarInvoice('${id}')">
+                                <i class="bi bi-file-earmark-text me-1"></i> Gerar Fatura PDF
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        `;
+
+        document.body.insertAdjacentHTML('beforeend', modalHtml);
+        const modal = new bootstrap.Modal(document.getElementById('modalInvoice'));
+        modal.show();
+    },
+
+    async _confirmarInvoice(id) {
+        const formaPagamento = document.getElementById('invoiceFormaPagamento').value;
+        if (!formaPagamento) {
+            document.getElementById('invoiceFormaPagamento').classList.add('is-invalid');
+            return;
+        }
+        const observacao = document.getElementById('invoiceObservacao').value.trim();
+
+        bootstrap.Modal.getInstance(document.getElementById('modalInvoice'))?.hide();
+
+        const bilhete = this._bilhetes.find(b => b.id === id);
+        if (!bilhete) return;
+
+        // Busca dados completos do cliente (CPF/CNPJ/endereço)
+        let clienteCompleto = null;
+        if (bilhete.clienteId) {
+            try {
+                const resp = await apiCall(`/api/clientes/${bilhete.clienteId}`);
+                if (resp && resp.ok) clienteCompleto = await resp.json();
+            } catch(e) {
+                console.warn('[TicketsModule] Não foi possível buscar cliente completo:', e);
+            }
+        }
+
+        ReportModule.gerarInvoicePDF(
+            { ...bilhete },
+            clienteCompleto || bilhete.cliente || null,
+            { formaPagamento, observacao }
+        );
+    },
+
+    /**
      * Edita bilhete existente
      */
     async editarBilhete(id) {
@@ -2510,6 +2612,9 @@ const TicketsModule = {
                             </button>
                             <button type="button" class="btn btn-success" onclick="TicketsModule.gerarRecibo('${bilhete.id}')">
                                 <i class="bi bi-receipt"></i> Gerar Recibo
+                            </button>
+                            <button type="button" class="btn btn-warning text-dark" onclick="TicketsModule.gerarInvoice('${bilhete.id}')">
+                                <i class="bi bi-file-earmark-text"></i> Emitir Fatura
                             </button>
                             <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Fechar</button>
                         </div>
