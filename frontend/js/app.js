@@ -138,6 +138,10 @@ const App = {
                 TicketsModule.render();
                 break;
 
+            case 'faturas':
+                FaturasModule.render();
+                break;
+
             case 'reservas':
                 ReservasModule.render();
                 break;
@@ -213,7 +217,7 @@ const App = {
      * Retorna a primeira página que o usuário pode acessar
      */
     getFirstAllowedPage() {
-        const ordem = ['busca', 'dashboard', 'cotacao', 'pacotes', 'bilhetes', 'reservas', 'hoteis', 'monitoramento', 'clientes', 'fornecedores', 'usuarios'];
+        const ordem = ['busca', 'dashboard', 'cotacao', 'pacotes', 'bilhetes', 'faturas', 'reservas', 'hoteis', 'monitoramento', 'clientes', 'fornecedores', 'usuarios'];
         for (const p of ordem) {
             if (this.hasAccess(p)) return p;
         }
