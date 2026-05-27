@@ -410,7 +410,7 @@ function extrairRotaDeObjeto(obj, depth = 0) {
         }
     }
 
-    // Padrão 2: campos diretos de pares origem/destino
+    // Padrão 2: campos diretos de pares origem/destino (string ou objeto com code)
     const pares = [
         ['departureCode',    'arrivalCode'],
         ['originCode',       'destinationCode'],
@@ -421,9 +421,12 @@ function extrairRotaDeObjeto(obj, depth = 0) {
         ['fromAirport',      'toAirport']
     ];
     for (const [ok, dk] of pares) {
-        if (obj[ok] && obj[dk] &&
-            /^[A-Z]{3}$/.test(obj[ok]) && /^[A-Z]{3}$/.test(obj[dk]) && obj[ok] !== obj[dk]) {
-            return { origem: obj[ok], destino: obj[dk] };
+        const ov = obj[ok], dv = obj[dk];
+        if (!ov || !dv) continue;
+        const o = typeof ov === 'string' ? ov : (ov.code || ov.airportCode || ov.iataCode || ov.iata || '');
+        const d = typeof dv === 'string' ? dv : (dv.code || dv.airportCode || dv.iataCode || dv.iata || '');
+        if (/^[A-Z]{3}$/.test(o) && /^[A-Z]{3}$/.test(d) && o !== d) {
+            return { origem: o, destino: d };
         }
     }
 
@@ -622,6 +625,31 @@ function extrairBilheteGenerico(label, iataPrefix, vooRegex, apiData, pageText, 
 }
 
 function extrairBilheteLatam(apiData, pageText, pageHtml) {
+    // Grava diagnóstico para análise (mesma abordagem do GOL/Azul)
+    try {
+        const logDir  = path.join(__dirname, '../../../backend/data');
+        const logFile = path.join(logDir, 'latam_debug.json');
+        if (!fs.existsSync(logDir)) fs.mkdirSync(logDir, { recursive: true });
+        fs.writeFileSync(logFile, JSON.stringify({
+            timestamp:       new Date().toISOString(),
+            pageTextLength:  pageText.length,
+            pageTextExcerpt: pageText.substring(0, 2000),
+            apisCount:       apiData.length,
+            apis: apiData.map(e => ({ url: e.url?.substring(0, 200), dataKeys: e.data ? Object.keys(e.data).slice(0, 20) : [] })),
+            htmlExcerpt:     pageHtml.substring(0, 3000)
+        }, null, 2), 'utf8');
+    } catch (_) {}
+
+    // Primeiro tenta entry injetada via page.evaluate (window state / __NEXT_DATA__)
+    const domEntry = apiData.find(e => e.url === 'dom://latam-window-state');
+    if (domEntry?.data) {
+        const r = extrairDeJson(domEntry.data, 'LA');
+        if (r?.ida?.data || r?.ida?.origem) {
+            console.log('[LATAM] Dados extraídos via window state DOM');
+            return r;
+        }
+    }
+
     return extrairBilheteGenerico('LATAM', 'LA', '(?:LA|JJ)\\s*(\\d{3,4})', apiData, pageText, pageHtml);
 }
 
@@ -1086,19 +1114,72 @@ router.post('/capturar', async (req, res) => {
             }
 
         } else if (isLatam) {
-            // LATAM: aguarda chamada JSON da latam ou 20s fixo
+            // LATAM: SPA — aguarda API de booking ou renderização do DOM
             const latamFilter = resp => {
-                const u = resp.url();
-                return (u.includes('latamairlines.com/bff/') || u.includes('latam.com') || u.includes('apigee.')) &&
-                       (resp.headers()['content-type'] || '').includes('application/json');
+                const u  = resp.url();
+                const ct = resp.headers()['content-type'] || '';
+                return u.includes('latamairlines.com') &&
+                       !u.includes('go-mpulse') && !u.includes('config.json') &&
+                       !u.includes('akamai') && !u.includes('/metrics') &&
+                       ct.includes('application/json');
             };
+            let apiRespondeu = false;
             try {
-                await page.waitForResponse(latamFilter, { timeout: 25000 });
-                console.log('[Reservas] LATAM API respondeu — aguardando +5s');
-                await new Promise(r => setTimeout(r, 5000));
+                await page.waitForResponse(latamFilter, { timeout: 20000 });
+                apiRespondeu = true;
+                console.log('[LATAM] API respondeu — aguardando +3s');
+                await new Promise(r => setTimeout(r, 3000));
             } catch (_) {
-                console.warn('[Reservas] LATAM API não respondeu — aguardando +15s');
-                await new Promise(r => setTimeout(r, 15000));
+                console.warn('[LATAM] API não respondeu — aguardando DOM renderizar...');
+            }
+
+            // Aguarda conteúdo visível (SPA pode demorar para renderizar a página de reserva)
+            if (!apiRespondeu) {
+                try {
+                    await page.waitForFunction(
+                        () => document.body && document.body.innerText.trim().length > 600,
+                        { timeout: 22000 }
+                    );
+                    console.log('[LATAM] DOM renderizado — aguardando +2s');
+                    await new Promise(r => setTimeout(r, 2000));
+                } catch (_) {
+                    console.warn('[LATAM] DOM não renderizou — aguardando +6s fixo');
+                    await new Promise(r => setTimeout(r, 6000));
+                }
+            }
+
+            // Extrai dados diretamente do contexto JS da página (após renderização)
+            try {
+                const latamEval = await page.evaluate(() => {
+                    // 1) __NEXT_DATA__ (Next.js SSR)
+                    const nd = document.getElementById('__NEXT_DATA__');
+                    if (nd) { try { return { _s: 'nextData', ...JSON.parse(nd.textContent) }; } catch(_){} }
+                    // 2) Variáveis globais conhecidas
+                    const KEYS = ['__latamState__','__LATAM_STATE__','__APP_STATE__',
+                                  '__INITIAL_STATE__','__store__','__redux_state__','__initialProps__'];
+                    for (const k of KEYS) {
+                        if (window[k] && typeof window[k] === 'object')
+                            return { _s: k, ...window[k] };
+                    }
+                    // 3) Scan window: chaves relacionadas a reserva/voo
+                    for (const k of Object.getOwnPropertyNames(window)) {
+                        if (!/booking|flight|reserv|itiner|journey/i.test(k)) continue;
+                        try {
+                            const v = window[k];
+                            if (v && typeof v === 'object' && !Array.isArray(v) && Object.keys(v).length > 3)
+                                return { _s: k, ...v };
+                        } catch(_) {}
+                    }
+                    return null;
+                });
+                if (latamEval) {
+                    apiData.push({ url: 'dom://latam-window-state', data: latamEval });
+                    console.log('[LATAM] Window state capturado, fonte:', latamEval._s);
+                } else {
+                    console.warn('[LATAM] Nenhum estado JS encontrado no window');
+                }
+            } catch (e) {
+                console.warn('[LATAM] Erro ao avaliar DOM:', e.message);
             }
 
         } else if (isGol) {
@@ -2384,6 +2465,21 @@ router.get('/debug-azul', authMiddleware, (req, res) => {
         }
     } catch (e) {
         res.status(500).json({ success: false, message: e.message });
+    }
+});
+
+/**
+ * GET /api/reservas/latam-debug
+ * Retorna o último arquivo de diagnóstico LATAM gravado no servidor
+ */
+router.get('/latam-debug', async (req, res) => {
+    try {
+        const logFile = path.join(__dirname, '../../../backend/data/latam_debug.json');
+        if (!fs.existsSync(logFile)) return res.status(404).json({ message: 'Nenhum debug LATAM disponível ainda' });
+        const data = JSON.parse(fs.readFileSync(logFile, 'utf8'));
+        res.json(data);
+    } catch (e) {
+        res.status(500).json({ message: e.message });
     }
 });
 
