@@ -220,9 +220,9 @@ const ReservasModule = {
                         <div id="camposLatam" style="display:none;">
                             <div class="row g-3">
                                 <div class="col-md-4">
-                                    <label class="form-label">Número da Compra (Order ID)</label>
+                                    <label class="form-label">Número da Compra</label>
                                     <input type="text" class="form-control" id="latamNumeroPedido"
-                                           placeholder="Ex: 123456789">
+                                           placeholder="Ex: 9576350CFYV ou LA9576350CFYV">
                                 </div>
                                 <div class="col-md-4">
                                     <label class="form-label">Sobrenome do Passageiro</label>
@@ -581,12 +581,14 @@ const ReservasModule = {
             return;
 
         } else if (cia === 'latam') {
-            const numeroPedido = document.getElementById('latamNumeroPedido').value.trim();
-            const sobrenome    = document.getElementById('latamSobrenome').value.trim();
+            let numeroPedido = document.getElementById('latamNumeroPedido').value.trim();
+            const sobrenome  = document.getElementById('latamSobrenome').value.trim();
             if (!numeroPedido || !sobrenome) {
                 App.showToast('Preencha o Número da Compra e Sobrenome', 'error');
                 return;
             }
+            // Normaliza: remove prefixo "LA" se presente (ex: "LA9576350CFYV" → "9576350CFYV")
+            if (/^LA[A-Z0-9]{4,}/i.test(numeroPedido)) numeroPedido = numeroPedido.substring(2);
             url = `https://www.latamairlines.com/br/pt/minhas-viagens/second-detail/?orderId=${numeroPedido}&lastname=${encodeURIComponent(sobrenome)}`;
             dadosForm = { ...dadosForm, numeroPedido, sobrenome };
 
@@ -1005,8 +1007,13 @@ const ReservasModule = {
                 if (result.success) {
                     Storage.updateReserva(r.id, { _savedInDb: true });
                     salvos++;
+                } else if (resp.status === 409) {
+                    // Reserva já existe no banco — marca como salva localmente
+                    Storage.updateReserva(r.id, { _savedInDb: true });
+                    App.showToast(result.message || 'Reserva já cadastrada no banco', 'warning');
                 } else {
                     console.error('[ReservasModule] Erro ao salvar:', result.message);
+                    App.showToast('Erro ao salvar: ' + (result.message || 'erro desconhecido'), 'error');
                     erros++;
                 }
             } catch (e) {
