@@ -630,14 +630,24 @@ function extrairBilheteLatam(apiData, pageText, pageHtml) {
         const logDir  = path.join(__dirname, '../../../backend/data');
         const logFile = path.join(logDir, 'latam_debug.json');
         if (!fs.existsSync(logDir)) fs.mkdirSync(logDir, { recursive: true });
+        const domEntry = apiData.find(e => e.url === 'dom://latam-window-state');
         fs.writeFileSync(logFile, JSON.stringify({
             timestamp:       new Date().toISOString(),
             pageTextLength:  pageText.length,
             pageTextExcerpt: pageText.substring(0, 2000),
             apisCount:       apiData.length,
-            apis: apiData.map(e => ({ url: e.url?.substring(0, 200), dataKeys: e.data ? Object.keys(e.data).slice(0, 20) : [] })),
-            htmlExcerpt:     pageHtml.substring(0, 3000)
+            apis: apiData.map(e => ({
+                url:      e.url?.substring(0, 200),
+                dataKeys: e.data ? Object.keys(e.data).slice(0, 30) : [],
+                // Para o nextData, mostra até 8kb para inspeção
+                dataExcerpt: e.url === 'dom://latam-window-state'
+                    ? JSON.stringify(e.data).substring(0, 8000)
+                    : undefined
+            })),
+            htmlExcerpt: pageHtml.substring(0, 3000)
         }, null, 2), 'utf8');
+        console.log('[LATAM] Debug gravado. nextData source:', domEntry?.data?._s,
+            '| keys:', domEntry?.data ? Object.keys(domEntry.data).slice(0,10) : 'none');
     } catch (_) {}
 
     // Primeiro tenta entry injetada via page.evaluate (window state / __NEXT_DATA__)
@@ -1115,10 +1125,27 @@ router.post('/capturar', async (req, res) => {
 
         } else if (isLatam) {
             // LATAM: usa fluxo público /minhas-viagens com localizador+sobrenome (sem auth)
-            const urlObj      = new URL(url);
-            const localizador = urlObj.searchParams.get('identifier') || '';
-            const sobrenomeL  = urlObj.searchParams.get('lastName')   || '';
+            const urlObj = new URL(url);
+            let localizador = urlObj.searchParams.get('identifier') || '';
+            let sobrenomeL  = urlObj.searchParams.get('lastName') || urlObj.searchParams.get('lastname') || '';
+
+            // Suporte ao formato antigo: second-detail?orderId=LA9576350CFYB&lastname=FRANCA
+            if (!localizador) {
+                let orderId = urlObj.searchParams.get('orderId') || '';
+                if (/^LA/i.test(orderId)) orderId = orderId.substring(2); // strip LA
+                const m = orderId.match(/([A-Z]{4,8})$/);
+                localizador = m ? m[1] : orderId;
+            }
             console.log(`[LATAM] localizador="${localizador}" sobrenome="${sobrenomeL}"`);
+
+            // Se URL é second-detail (requer auth), re-navega para o formulário público
+            if (url.includes('second-detail') || !urlObj.searchParams.get('identifier')) {
+                const publicUrl = `https://www.latamairlines.com/br/pt/minhas-viagens?identifier=${localizador}&lastName=${encodeURIComponent(sobrenomeL)}`;
+                console.log('[LATAM] Re-navegando para URL pública:', publicUrl);
+                try {
+                    await page.goto(publicUrl, { waitUntil: 'domcontentloaded', timeout: 40000 });
+                } catch (eNav) { console.warn('[LATAM] Re-nav erro:', eNav.message); }
+            }
 
             // 1) Tenta chamada direta à API LATAM (sem Puppeteer)
             const latamNodeHeaders = {
