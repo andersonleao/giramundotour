@@ -1025,6 +1025,23 @@ router.post('/capturar', async (req, res) => {
             }
         }
 
+        // LATAM: transforma URL second-detail → pública ANTES de navegar (evita dois page.goto competindo)
+        if (isLatam && url.includes('second-detail')) {
+            const _uObj = new URL(url);
+            let _loc = _uObj.searchParams.get('identifier') || '';
+            let _sob = _uObj.searchParams.get('lastName') || _uObj.searchParams.get('lastname') || '';
+            if (!_loc) {
+                let _oid = _uObj.searchParams.get('orderId') || '';
+                if (/^LA/i.test(_oid)) _oid = _oid.substring(2);
+                const _m = _oid.match(/([A-Z]{4,8})$/);
+                _loc = _m ? _m[1] : _oid;
+            }
+            if (_loc) {
+                url = `https://www.latamairlines.com/br/pt/minhas-viagens?identifier=${_loc}&lastName=${encodeURIComponent(_sob)}`;
+                console.log('[LATAM] URL pré-transformada (antes do goto):', url);
+            }
+        }
+
         // Inicia navegação
         page.goto(url, { waitUntil: 'domcontentloaded', timeout: 90000 })
             .catch(e => console.warn('[Reservas] Nav:', e.message));
@@ -1146,15 +1163,6 @@ router.post('/capturar', async (req, res) => {
                 localizador = m ? m[1] : orderId;
             }
             console.log(`[LATAM] localizador="${localizador}" sobrenome="${sobrenomeL}"`);
-
-            // Se URL é second-detail (requer auth), re-navega para o formulário público
-            if (url.includes('second-detail') || !urlObj.searchParams.get('identifier')) {
-                const publicUrl = `https://www.latamairlines.com/br/pt/minhas-viagens?identifier=${localizador}&lastName=${encodeURIComponent(sobrenomeL)}`;
-                console.log('[LATAM] Re-navegando para URL pública:', publicUrl);
-                try {
-                    await page.goto(publicUrl, { waitUntil: 'domcontentloaded', timeout: 40000 });
-                } catch (eNav) { console.warn('[LATAM] Re-nav erro:', eNav.message); }
-            }
 
             // 1) Tenta chamada direta à API LATAM (sem Puppeteer)
             const latamNodeHeaders = {
