@@ -1114,54 +1114,111 @@ router.post('/capturar', async (req, res) => {
             }
 
         } else if (isLatam) {
-            // LATAM: SPA — aguarda API de booking ou renderização do DOM
-            const latamFilter = resp => {
-                const u  = resp.url();
-                const ct = resp.headers()['content-type'] || '';
-                return u.includes('latamairlines.com') &&
-                       !u.includes('go-mpulse') && !u.includes('config.json') &&
-                       !u.includes('akamai') && !u.includes('/metrics') &&
-                       ct.includes('application/json');
+            // LATAM: usa fluxo público /minhas-viagens com localizador+sobrenome (sem auth)
+            const urlObj      = new URL(url);
+            const localizador = urlObj.searchParams.get('identifier') || '';
+            const sobrenomeL  = urlObj.searchParams.get('lastName')   || '';
+            console.log(`[LATAM] localizador="${localizador}" sobrenome="${sobrenomeL}"`);
+
+            // 1) Tenta chamada direta à API LATAM (sem Puppeteer)
+            const latamNodeHeaders = {
+                'Accept': 'application/json, text/plain, */*',
+                'Accept-Language': 'pt-BR,pt;q=0.9',
+                'Origin': 'https://www.latamairlines.com',
+                'Referer': 'https://www.latamairlines.com/br/pt/minhas-viagens',
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
             };
-            let apiRespondeu = false;
-            try {
-                await page.waitForResponse(latamFilter, { timeout: 20000 });
-                apiRespondeu = true;
-                console.log('[LATAM] API respondeu — aguardando +3s');
-                await new Promise(r => setTimeout(r, 3000));
-            } catch (_) {
-                console.warn('[LATAM] API não respondeu — aguardando DOM renderizar...');
+            const latamApiUrls = [
+                `https://www.latamairlines.com/bff/retrieve-booking?locator=${localizador}&lastName=${sobrenomeL}`,
+                `https://www.latamairlines.com/bff/retrieve-booking?pnr=${localizador}&lastName=${sobrenomeL}`,
+                `https://apimobile.tam.com.br/retrieve-booking/v1/bookings?pnr=${localizador}&lastName=${sobrenomeL}`,
+            ];
+            for (const ep of latamApiUrls) {
+                try {
+                    const nr = await fetch(ep, { headers: latamNodeHeaders });
+                    console.log(`[LATAM] API direta HTTP ${nr.status}: ${ep}`);
+                    if (nr.ok) {
+                        const json = await nr.json();
+                        if (json && Object.keys(json).length > 2) {
+                            apiData.push({ url: ep, data: json });
+                            console.log('[LATAM] API direta: dados obtidos!');
+                            break;
+                        }
+                    }
+                } catch (eL) { console.warn('[LATAM] API direta erro:', eL.message); }
             }
 
-            // Aguarda conteúdo visível (SPA pode demorar para renderizar a página de reserva)
-            if (!apiRespondeu) {
+            if (apiData.length === 0) {
+                // 2) Fallback: preenche formulário via Puppeteer
                 try {
-                    await page.waitForFunction(
-                        () => document.body && document.body.innerText.trim().length > 600,
-                        { timeout: 22000 }
-                    );
-                    console.log('[LATAM] DOM renderizado — aguardando +2s');
-                    await new Promise(r => setTimeout(r, 2000));
-                } catch (_) {
-                    console.warn('[LATAM] DOM não renderizou — aguardando +6s fixo');
-                    await new Promise(r => setTimeout(r, 6000));
+                    await page.waitForSelector('input', { timeout: 30000 });
+                    await new Promise(r => setTimeout(r, 1500 + Math.random() * 500));
+
+                    const inputs = await page.$$('input:not([type=hidden]):not([type=checkbox]):not([type=radio])');
+                    console.log(`[LATAM] Inputs encontrados: ${inputs.length}`);
+
+                    const typeInto = async (el, val) => {
+                        if (!el || !val) return;
+                        await el.click({ clickCount: 3 });
+                        await el.type(val, { delay: 65 });
+                        await page.keyboard.press('Tab');
+                        await new Promise(r => setTimeout(r, 300));
+                    };
+
+                    if (inputs.length >= 2) {
+                        await typeInto(inputs[0], localizador);
+                        await typeInto(inputs[1], sobrenomeL);
+                    } else if (inputs.length === 1) {
+                        await typeInto(inputs[0], localizador);
+                    }
+
+                    await new Promise(r => setTimeout(r, 800));
+                    const clicou = await page.evaluate(() => {
+                        const btn = [...document.querySelectorAll('button,[type="submit"]')]
+                            .find(b => /buscar|consultar|continuar|ver|acessar|encontrar|search/i.test(b.textContent));
+                        if (btn) { btn.click(); return btn.textContent.trim(); }
+                        return false;
+                    });
+                    console.log('[LATAM] Botão clicado:', clicou);
+
+                    // Aguarda API de booking após submit
+                    const latamFilter = resp => {
+                        const u  = resp.url();
+                        const ct = resp.headers()['content-type'] || '';
+                        return u.includes('latamairlines.com') &&
+                               !u.includes('go-mpulse') && !u.includes('config.json') && !u.includes('akamai') &&
+                               ct.includes('application/json');
+                    };
+                    try {
+                        await page.waitForResponse(latamFilter, { timeout: 25000 });
+                        console.log('[LATAM] API respondeu após submit — aguardando +3s');
+                        await new Promise(r => setTimeout(r, 3000));
+                    } catch (_) {
+                        console.warn('[LATAM] API não respondeu — aguardando DOM...');
+                        try {
+                            await page.waitForFunction(
+                                () => document.body && document.body.innerText.trim().length > 600,
+                                { timeout: 15000 }
+                            );
+                            await new Promise(r => setTimeout(r, 2000));
+                        } catch (_) { await new Promise(r => setTimeout(r, 6000)); }
+                    }
+                } catch (e) {
+                    console.warn('[LATAM] Erro no formulário:', e.message);
+                    await new Promise(r => setTimeout(r, 8000));
                 }
             }
 
-            // Extrai dados diretamente do contexto JS da página (após renderização)
+            // 3) Captura estado JS da página (após renderização)
             try {
                 const latamEval = await page.evaluate(() => {
-                    // 1) __NEXT_DATA__ (Next.js SSR)
                     const nd = document.getElementById('__NEXT_DATA__');
                     if (nd) { try { return { _s: 'nextData', ...JSON.parse(nd.textContent) }; } catch(_){} }
-                    // 2) Variáveis globais conhecidas
-                    const KEYS = ['__latamState__','__LATAM_STATE__','__APP_STATE__',
-                                  '__INITIAL_STATE__','__store__','__redux_state__','__initialProps__'];
+                    const KEYS = ['__latamState__','__LATAM_STATE__','__APP_STATE__','__INITIAL_STATE__'];
                     for (const k of KEYS) {
                         if (window[k] && typeof window[k] === 'object')
                             return { _s: k, ...window[k] };
                     }
-                    // 3) Scan window: chaves relacionadas a reserva/voo
                     for (const k of Object.getOwnPropertyNames(window)) {
                         if (!/booking|flight|reserv|itiner|journey/i.test(k)) continue;
                         try {
@@ -1175,12 +1232,8 @@ router.post('/capturar', async (req, res) => {
                 if (latamEval) {
                     apiData.push({ url: 'dom://latam-window-state', data: latamEval });
                     console.log('[LATAM] Window state capturado, fonte:', latamEval._s);
-                } else {
-                    console.warn('[LATAM] Nenhum estado JS encontrado no window');
                 }
-            } catch (e) {
-                console.warn('[LATAM] Erro ao avaliar DOM:', e.message);
-            }
+            } catch (e) { console.warn('[LATAM] DOM eval erro:', e.message); }
 
         } else if (isGol) {
             // GOL: SPA Angular/MFE — usa ElementHandle.type() para simular digitação real

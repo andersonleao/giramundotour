@@ -220,9 +220,9 @@ const ReservasModule = {
                         <div id="camposLatam" style="display:none;">
                             <div class="row g-3">
                                 <div class="col-md-4">
-                                    <label class="form-label">Número da Compra</label>
-                                    <input type="text" class="form-control" id="latamNumeroPedido"
-                                           placeholder="Ex: 9576350CFYV ou LA9576350CFYV">
+                                    <label class="form-label">Localizador / Código da Reserva</label>
+                                    <input type="text" class="form-control text-uppercase" id="latamNumeroPedido"
+                                           placeholder="Ex: CFYB ou LA9576350CFYB">
                                 </div>
                                 <div class="col-md-4">
                                     <label class="form-label">Sobrenome do Passageiro</label>
@@ -581,16 +581,20 @@ const ReservasModule = {
             return;
 
         } else if (cia === 'latam') {
-            let numeroPedido = document.getElementById('latamNumeroPedido').value.trim();
-            const sobrenome  = document.getElementById('latamSobrenome').value.trim();
-            if (!numeroPedido || !sobrenome) {
-                App.showToast('Preencha o Número da Compra e Sobrenome', 'error');
+            let input = document.getElementById('latamNumeroPedido').value.trim().toUpperCase();
+            const sobrenome = document.getElementById('latamSobrenome').value.trim();
+            if (!input || !sobrenome) {
+                App.showToast('Preencha o Localizador e Sobrenome', 'error');
                 return;
             }
-            // Normaliza: remove prefixo "LA" se presente (ex: "LA9576350CFYV" → "9576350CFYV")
-            if (/^LA[A-Z0-9]{4,}/i.test(numeroPedido)) numeroPedido = numeroPedido.substring(2);
-            url = `https://www.latamairlines.com/br/pt/minhas-viagens/second-detail/?orderId=${numeroPedido}&lastname=${encodeURIComponent(sobrenome)}`;
-            dadosForm = { ...dadosForm, numeroPedido, sobrenome };
+            // Extrai o PNR (localizador) do código fornecido:
+            // "LA9576350CFYB" → strip "LA" → "9576350CFYB" → letras finais → "CFYB"
+            // "CFYB" → já é o localizador
+            if (/^LA[A-Z0-9]{4,}$/i.test(input)) input = input.substring(2);
+            const pnrMatch = input.match(/([A-Z]{4,8})$/);
+            const localizador = pnrMatch ? pnrMatch[1] : input;
+            url = `https://www.latamairlines.com/br/pt/minhas-viagens?identifier=${localizador}&lastName=${encodeURIComponent(sobrenome)}`;
+            dadosForm = { ...dadosForm, localizador, sobrenome, numeroPedido: input };
 
         } else if (cia === 'tap') {
             const localizador = document.getElementById('tapLocalizador').value.trim().toUpperCase();
