@@ -335,7 +335,7 @@ function extrairDatasISOCampos(str) {
     const limite = new Date();
     limite.setDate(limite.getDate() - 90);
     const minData = limite.toISOString().substring(0, 10);
-    const matches = [...str.matchAll(/"(?:date|departureDate|arrivalDate|flightDate|outboundDate|inboundDate|departure_date|arrival_date|scheduledDeparture|scheduledArrival|dateOfDeparture|checkInDate|dataPartida|dataChegada|dataVoo|dataIda|dataVolta|dt_partida|dtPartida|dtChegada|travelDate|segmentDate|startDate|departureDay|arrivalDay|flightDatetime|dateTime)"\s*:\s*"(\d{4}-\d{2}-\d{2})"/gi)]
+    const matches = [...str.matchAll(/"(?:date|departureDate|arrivalDate|flightDate|outboundDate|inboundDate|departure_date|arrival_date|scheduledDeparture|scheduledArrival|dateOfDeparture|checkInDate|dataPartida|dataChegada|dataVoo|dataIda|dataVolta|dt_partida|dtPartida|dtChegada|travelDate|segmentDate|startDate|departureDay|arrivalDay|flightDatetime|dateTime|departureDateTime|arrivalDateTime|std|sta|etd|eta|flightDate|scheduleDate|operatingDate|serviceDate|journeyDate|legDate)"\s*:\s*"(\d{4}-\d{2}-\d{2})"/gi)]
         .map(m => ({ data: m[1], hora: '' }))
         .filter(d => d.data >= minData);
 
@@ -653,10 +653,19 @@ function extrairBilheteLatam(apiData, pageText, pageHtml) {
     // Primeiro tenta entry injetada via page.evaluate (window state / __NEXT_DATA__)
     const domEntry = apiData.find(e => e.url === 'dom://latam-window-state');
     if (domEntry?.data) {
-        const r = extrairDeJson(domEntry.data, 'LA');
+        // __NEXT_DATA__ tem estrutura: { props: { pageProps: { booking: ... } } }
+        const pageProps = domEntry.data?.props?.pageProps;
+        const nextDataPayload = pageProps || domEntry.data;
+        const r = extrairDeJson(nextDataPayload, 'LA');
         if (r?.ida?.data || r?.ida?.origem) {
-            console.log('[LATAM] Dados extraídos via window state DOM');
+            console.log('[LATAM] Dados extraídos via window state DOM (nextData.props.pageProps)');
             return r;
+        }
+        // Tenta também o objeto raiz
+        const r2 = extrairDeJson(domEntry.data, 'LA');
+        if (r2?.ida?.data || r2?.ida?.origem) {
+            console.log('[LATAM] Dados extraídos via window state DOM (raiz)');
+            return r2;
         }
     }
 
@@ -1232,7 +1241,25 @@ router.post('/capturar', async (req, res) => {
                     }
                 } catch (e) {
                     console.warn('[LATAM] Erro no formulário:', e.message);
-                    await new Promise(r => setTimeout(r, 8000));
+                    // Mesmo sem form, a página pode ter auto-carregado o booking via URL params
+                    // Aguarda resposta JSON da LATAM por até 12s
+                    try {
+                        await page.waitForResponse(
+                            resp => {
+                                const u  = resp.url();
+                                const ct = resp.headers()['content-type'] || '';
+                                return u.includes('latamairlines.com') &&
+                                       !u.includes('akamai') && !u.includes('go-mpulse') &&
+                                       ct.includes('application/json');
+                            },
+                            { timeout: 12000 }
+                        );
+                        console.log('[LATAM] API respondeu automaticamente (auto-fetch por URL params)');
+                        await new Promise(r => setTimeout(r, 2000));
+                    } catch (_) {
+                        console.warn('[LATAM] Nenhuma resposta JSON após timeout — capturando page state');
+                        await new Promise(r => setTimeout(r, 3000));
+                    }
                 }
             }
 
