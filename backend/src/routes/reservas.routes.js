@@ -1349,6 +1349,31 @@ router.post('/capturar', async (req, res) => {
                         console.log('[LATAM] Dados de booking capturados durante page load — aguardando +2s');
                         await new Promise(r => setTimeout(r, 2000));
                     } else {
+                        // Aceita o cookie consent banner (pode bloquear o clique no botão)
+                        try {
+                            const cookieAccepted = await page.evaluate(() => {
+                                // Busca botão de aceitar cookies (common patterns)
+                                const patterns = [
+                                    'button[id*="accept"], button[id*="cookie"], button[id*="consent"]',
+                                    'button[class*="accept"], button[class*="cookie"], button[class*="consent"]',
+                                    '[data-testid*="accept"], [data-testid*="cookie"]',
+                                ];
+                                for (const sel of patterns) {
+                                    const btn = document.querySelector(sel);
+                                    if (btn) { btn.click(); return 'clicked: ' + btn.textContent?.trim().substring(0,30); }
+                                }
+                                // Busca por texto
+                                const cookieBtn = [...document.querySelectorAll('button')]
+                                    .find(b => /aceitar|accept|concordar|agree|allow.*cookie|permitir/i.test(b.textContent || ''));
+                                if (cookieBtn) { cookieBtn.click(); return 'text: ' + cookieBtn.textContent?.trim().substring(0,30); }
+                                return null;
+                            });
+                            if (cookieAccepted) console.log('[LATAM] Cookie banner:', cookieAccepted);
+                            else console.log('[LATAM] Cookie banner: não encontrado (OK)');
+                        } catch (_) {}
+
+                        await new Promise(r => setTimeout(r, 500));
+
                         // Obtém info dos inputs via evaluate para diagnóstico
                         const inputInfo = await page.evaluate(() => {
                             const inputs = [...document.querySelectorAll('input:not([type=hidden])')];
@@ -1429,21 +1454,32 @@ router.post('/capturar', async (req, res) => {
 
                         await new Promise(r => setTimeout(r, 800));
 
-                        // Clica no botão via coordenadas do mouse (mais real que btn.click())
+                        // Aguarda reCAPTCHA inicializar (carregado pelo Next.js chunk)
+                        await page.waitForFunction(
+                            () => !!(window.grecaptcha?.enterprise || window.grecaptcha?.ready),
+                            { timeout: 8000 }
+                        ).catch(() => console.warn('[LATAM] reCAPTCHA não carregou em 8s'));
+
+                        await new Promise(r => setTimeout(r, 500));
+
+                        // Scroll para o botão + clique via coordenadas (mais real que btn.click())
                         const btnCoords = await page.evaluate(() => {
                             const btn = [...document.querySelectorAll('button,[type="submit"]')]
                                 .find(b => /procurar|buscar|search|continuar/i.test(b.textContent || b.getAttribute('aria-label') || ''));
                             if (!btn) return null;
+                            btn.scrollIntoView({ behavior: 'smooth', block: 'center' });
                             const r = btn.getBoundingClientRect();
                             return { x: r.x + r.width/2, y: r.y + r.height/2, text: btn.textContent?.trim() };
                         });
                         console.log('[LATAM] Botão coords:', JSON.stringify(btnCoords));
 
+                        await new Promise(r => setTimeout(r, 500));
+
                         if (btnCoords) {
                             await page.mouse.click(btnCoords.x, btnCoords.y);
                         }
                         await page.keyboard.press('Enter');
-                        console.log('[LATAM] Enter pressionado');
+                        console.log('[LATAM] Enter pressionado (reCAPTCHA deve ter executado)');
 
                         // Aguarda resposta da API após submit
                         try {
