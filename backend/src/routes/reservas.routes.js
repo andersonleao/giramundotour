@@ -1766,7 +1766,7 @@ router.post('/capturar', async (req, res) => {
             bilheteData = extrairBilheteTap(apiData, pageText, pageHtml);
         }
 
-        res.json({ success: true, pageText, pageHtml: pageHtml.substring(0, 200000), apiData, bilheteData });
+        res.json({ success: true, pageText, pageHtml: pageHtml.substring(0, 200000), apiData, bilheteData, _latamIntercepted: _latamReqCapture, _latamConsoleLogs: _consoleLogs });
 
     } catch (error) {
         console.error('[Reservas] Erro:', error.message);
