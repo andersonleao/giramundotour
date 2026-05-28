@@ -974,6 +974,38 @@ router.post('/capturar', async (req, res) => {
         await page.setViewport({ width: 1366, height: 768 });
 
         const apiData = [];
+        // Intercepta requisições de saída LATAM para capturar URL/headers usados pelo SPA
+        const _latamReqCapture = [];
+        if (isLatam) {
+            page.on('request', req => {
+                const u = req.url();
+                if (!u.includes('latamairlines.com')) return;
+                if (u.includes('MX8t95') || u.includes('go-mpulse') || u.includes('/locales/')) return;
+                _latamReqCapture.push({
+                    method:  req.method(),
+                    url:     u,
+                    headers: req.headers(),
+                    body:    req.postData()
+                });
+                console.log(`[LATAM REQ] ${req.method()} ${u.substring(0, 120)}`);
+                console.log(`[LATAM REQ HEADERS] ${JSON.stringify(req.headers()).substring(0, 300)}`);
+            });
+        }
+        // Captura logs do console do browser (inclui __LATAM_FETCH__ do interceptor)
+        const _consoleLogs = [];
+        if (isLatam) {
+            page.on('console', msg => {
+                const txt = msg.text();
+                if (txt.startsWith('__LATAM_FETCH__:')) {
+                    try {
+                        const info = JSON.parse(txt.substring('__LATAM_FETCH__:'.length));
+                        _consoleLogs.push(info);
+                        console.log('[LATAM FETCH INTERCEPTADO]', info.method, info.url.substring(0, 100));
+                        console.log('[LATAM FETCH HEADERS]', JSON.stringify(info.headers).substring(0, 400));
+                    } catch (_) {}
+                }
+            });
+        }
         page.on('response', async response => {
             const ct = response.headers()['content-type'] || '';
             if (!ct.includes('application/json')) return;
@@ -1026,6 +1058,36 @@ router.post('/capturar', async (req, res) => {
             } catch (fsErr) {
                 console.warn('[GOL] FlareSolverr indisponível, tentando sem bypass:', fsErr.message);
             }
+        }
+
+        // LATAM: injeta interceptor de fetch para capturar URL+headers usados pelo SPA (antes do JS do site)
+        if (isLatam) {
+            await page.evaluateOnNewDocument(() => {
+                const _orig = window.fetch;
+                window.fetch = async function(...args) {
+                    const req = args[0];
+                    const opts = args[1] || {};
+                    const u = typeof req === 'string' ? req : req?.url || '';
+                    if (u.includes('latamairlines.com') && !u.includes('MX8t95') && !u.includes('/locales/')) {
+                        const hdrs = {};
+                        if (opts.headers) {
+                            if (opts.headers instanceof Headers) {
+                                opts.headers.forEach((v, k) => { hdrs[k] = v; });
+                            } else {
+                                Object.assign(hdrs, opts.headers);
+                            }
+                        }
+                        // Envia para o console (capturado pelo Puppeteer)
+                        console.log('__LATAM_FETCH__:' + JSON.stringify({
+                            method: opts.method || 'GET',
+                            url: u,
+                            headers: hdrs,
+                            body: typeof opts.body === 'string' ? opts.body.substring(0, 300) : null
+                        }));
+                    }
+                    return _orig.apply(this, args);
+                };
+            }).catch(e => console.warn('[LATAM] evaluateOnNewDocument erro:', e.message));
         }
 
         // LATAM: transforma URL second-detail → pública ANTES de navegar (evita dois page.goto competindo)
@@ -1352,6 +1414,36 @@ router.post('/capturar', async (req, res) => {
                         await new Promise(r => setTimeout(r, 3000));
                     }
                 }
+            }
+
+            // 2.4) Replica a chamada capturada pelo interceptor fetch (URL + headers exatos do SPA)
+            if (!latamTemDados() && _consoleLogs.length > 0) {
+                const lastReq = _consoleLogs[_consoleLogs.length - 1];
+                console.log('[LATAM] Replicando chamada interceptada:', lastReq.method, lastReq.url?.substring(0, 100));
+                try {
+                    const akamaiCookies = await page.cookies();
+                    const cookieStr = akamaiCookies.map(c => `${c.name}=${c.value}`).join('; ');
+                    const replicaHeaders = {
+                        ...lastReq.headers,
+                        'Cookie': cookieStr,
+                        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+                    };
+                    const fetchOpts = {
+                        method: lastReq.method || 'GET',
+                        headers: replicaHeaders,
+                    };
+                    if (lastReq.body) fetchOpts.body = lastReq.body;
+                    const nr = await fetch(lastReq.url, fetchOpts);
+                    const ct = nr.headers.get('content-type') || '';
+                    console.log(`[LATAM] Replica HTTP ${nr.status} [${ct.substring(0, 20)}]`);
+                    if (nr.ok && ct.includes('json')) {
+                        const json = await nr.json();
+                        if (json && Object.keys(json).length > 2) {
+                            apiData.push({ url: lastReq.url, data: json });
+                            console.log('[LATAM] Replica: dados obtidos!');
+                        }
+                    }
+                } catch (eRep) { console.warn('[LATAM] Replica erro:', eRep.message); }
             }
 
             // 2.5) Cookie-based fetch: usa cookies Akamai da sessão Puppeteer para chamar a API diretamente
