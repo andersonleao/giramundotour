@@ -193,12 +193,53 @@ router.post('/pnr', async (req, res) => {
         }
 
         if (cia === 'LATAM' || cia === 'LA') {
-            const url = `https://www.latamairlines.com/br/pt/mytrips?recordLocator=${encodeURIComponent(code)}&lastName=${encodeURIComponent(lastName || '')}`;
+            if (!lastName) return res.status(400).json({ success: false, message: 'sobrenome é obrigatório para LATAM' });
+            const url = `https://www.latamairlines.com/br/pt/minhas-viagens?identifier=${encodeURIComponent(code)}&lastName=${encodeURIComponent(lastName)}`;
             const { status, json } = await internalPost(req, '/api/reservas/capturar', { url });
             if (status !== 200 || !json?.success) {
                 return res.status(status || 500).json({ success: false, message: json?.message || 'Falha ao consultar LATAM' });
             }
-            return res.json({ success: true, bilhete: normalizeGeneric(json.data || json, code, 'LATAM') });
+
+            // /capturar para LATAM retorna { bilheteData: { passageiroNome, ida, volta } }
+            // Normaliza esses dados em formato padrão.
+            const data = json.data || json;
+            const bd = data?.bilheteData || data;
+            const ida = bd?.ida || {};
+            const vlt = bd?.volta || null;
+            const trechos = [];
+            if (ida.origem || ida.destino) {
+                trechos.push({
+                    companhia: 'LA',
+                    numero:    ida.voo || '',
+                    origem:    ida.origem || '',
+                    destino:   ida.destino || '',
+                    partida:   ida.data && ida.horaPartida ? `${ida.data}T${ida.horaPartida}` : (ida.data || ''),
+                    chegada:   ida.data && ida.horaChegada ? `${ida.data}T${ida.horaChegada}` : (ida.data || ''),
+                });
+            }
+            if (vlt && (vlt.origem || vlt.destino)) {
+                trechos.push({
+                    companhia: 'LA',
+                    numero:    vlt.voo || '',
+                    origem:    vlt.origem || '',
+                    destino:   vlt.destino || '',
+                    partida:   vlt.data && vlt.horaPartida ? `${vlt.data}T${vlt.horaPartida}` : (vlt.data || ''),
+                    chegada:   vlt.data && vlt.horaChegada ? `${vlt.data}T${vlt.horaChegada}` : (vlt.data || ''),
+                });
+            }
+            return res.json({ success: true, bilhete: {
+                codigoReserva: code,
+                companhia:     'LATAM',
+                origem:        ida.origem  || '',
+                destino:       ida.destino || '',
+                dataIda:       ida.data    || null,
+                horaPartida:   ida.horaPartida || null,
+                horaChegada:   ida.horaChegada || null,
+                numeroVoo:     ida.voo     || '',
+                passageiros:   bd?.passageiroNome ? [{ nome: bd.passageiroNome, tipo: 'ADT' }] : [],
+                trechos,
+                raw: data,
+            }});
         }
 
         return res.status(400).json({ success: false, message: `Companhia "${cia}" não suportada. Use AZUL, GOL ou LATAM.` });
