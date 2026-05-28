@@ -1227,10 +1227,15 @@ router.post('/capturar', async (req, res) => {
                     await page.waitForSelector('input, [data-testid="mytrips"]', { timeout: 30000 });
                     await new Promise(r => setTimeout(r, 2000 + Math.random() * 1000));
 
-                    // Verifica se alguma resposta JSON da LATAM chegou durante o carregamento
-                    const jaRespondeu = apiData.some(e => e.url?.includes('latamairlines.com'));
+                    // Verifica se alguma resposta de BOOKING LATAM chegou durante o carregamento
+                    // (exclui arquivos estáticos como locales/common.json, config.json, analytics)
+                    const jaRespondeu = apiData.some(e =>
+                        e.url?.includes('latamairlines.com') &&
+                        !e.url.includes('/locales/') && !e.url.includes('config.json') &&
+                        !e.url.includes('/MX8t95') && !e.url.includes('go-mpulse')
+                    );
                     if (jaRespondeu) {
-                        console.log('[LATAM] Dados já capturados durante page load — aguardando +2s');
+                        console.log('[LATAM] Dados de booking capturados durante page load — aguardando +2s');
                         await new Promise(r => setTimeout(r, 2000));
                     } else {
                         // Tenta preencher o formulário com seletores específicos do xp-web-mytrips
