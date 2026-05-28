@@ -1060,32 +1060,48 @@ router.post('/capturar', async (req, res) => {
             }
         }
 
-        // LATAM: injeta interceptor de fetch para capturar URL+headers usados pelo SPA (antes do JS do site)
+        // LATAM: injeta interceptor de fetch + XHR para capturar URL+headers usados pelo SPA
         if (isLatam) {
             await page.evaluateOnNewDocument(() => {
-                const _orig = window.fetch;
+                const _log = (method, url, headers, body) => {
+                    if (!url.includes('latamairlines.com')) return;
+                    if (url.includes('MX8t95') || url.includes('/locales/') || url.includes('go-mpulse')) return;
+                    console.log('__LATAM_FETCH__:' + JSON.stringify({ method, url, headers, body }));
+                };
+
+                // Intercept fetch
+                const _origFetch = window.fetch;
                 window.fetch = async function(...args) {
                     const req = args[0];
                     const opts = args[1] || {};
                     const u = typeof req === 'string' ? req : req?.url || '';
-                    if (u.includes('latamairlines.com') && !u.includes('MX8t95') && !u.includes('/locales/')) {
-                        const hdrs = {};
-                        if (opts.headers) {
-                            if (opts.headers instanceof Headers) {
-                                opts.headers.forEach((v, k) => { hdrs[k] = v; });
-                            } else {
-                                Object.assign(hdrs, opts.headers);
-                            }
-                        }
-                        // Envia para o console (capturado pelo Puppeteer)
-                        console.log('__LATAM_FETCH__:' + JSON.stringify({
-                            method: opts.method || 'GET',
-                            url: u,
-                            headers: hdrs,
-                            body: typeof opts.body === 'string' ? opts.body.substring(0, 300) : null
-                        }));
+                    const hdrs = {};
+                    if (opts.headers) {
+                        if (opts.headers instanceof Headers) {
+                            opts.headers.forEach((v, k) => { hdrs[k] = v; });
+                        } else { Object.assign(hdrs, opts.headers); }
                     }
-                    return _orig.apply(this, args);
+                    _log(opts.method || 'GET', u, hdrs, typeof opts.body === 'string' ? opts.body.substring(0, 500) : null);
+                    return _origFetch.apply(this, args);
+                };
+
+                // Intercept XHR
+                const _origOpen  = XMLHttpRequest.prototype.open;
+                const _origSend  = XMLHttpRequest.prototype.send;
+                const _origSetHdr = XMLHttpRequest.prototype.setRequestHeader;
+                XMLHttpRequest.prototype.open = function(method, url, ...rest) {
+                    this._interceptMethod = method;
+                    this._interceptUrl    = url;
+                    this._interceptHdrs   = {};
+                    return _origOpen.apply(this, [method, url, ...rest]);
+                };
+                XMLHttpRequest.prototype.setRequestHeader = function(name, value) {
+                    if (this._interceptHdrs) this._interceptHdrs[name] = value;
+                    return _origSetHdr.apply(this, [name, value]);
+                };
+                XMLHttpRequest.prototype.send = function(body) {
+                    _log(this._interceptMethod || 'GET', this._interceptUrl || '', this._interceptHdrs || {}, body?.substring?.(0, 500) || null);
+                    return _origSend.apply(this, [body]);
                 };
             }).catch(e => console.warn('[LATAM] evaluateOnNewDocument erro:', e.message));
         }
