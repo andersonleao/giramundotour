@@ -1496,45 +1496,60 @@ router.post('/capturar', async (req, res) => {
                 } catch (eCook) { console.warn('[LATAM] Cookies Puppeteer erro:', eCook.message); }
             }
 
-            // 2.6) page.evaluate: chama a API de booking de dentro do browser (com cookies reais)
-            // O browser tem os cookies da sessão incluindo os Akamai — pode ter mais sucesso que Node fetch
+            // 2.6) page.evaluate: chama a API de booking de dentro do browser (com cookies reais + interceptor)
             if (!latamTemDados()) {
                 try {
                     const latamBrowserResult = await page.evaluate(async (loc, sob) => {
-                        const endpoints = [
-                            `https://www.latamairlines.com/bff/retrieve-booking?locator=${loc}&lastName=${sob}`,
-                            `https://www.latamairlines.com/bff/retrieve-booking?identifier=${loc}&lastName=${sob}`,
-                            `https://www.latamairlines.com/pt-br/xp-web-mytrips/api/retrieve?identifier=${loc}&lastName=${sob}`,
+                        const results = [];
+                        // POST para o endpoint confirmado (retorna 400 "Missing latam headers")
+                        const postCalls = [
+                            { url: 'https://www.latamairlines.com/bff/mytrips/retrieve',
+                              body: JSON.stringify({ identifier: loc, lastName: sob, market: 'BR', locale: 'pt-BR' }) },
+                            { url: 'https://www.latamairlines.com/bff/mytrips/retrieve',
+                              body: JSON.stringify({ locator: loc, lastName: sob }) },
                         ];
-                        for (const ep of endpoints) {
+                        for (const { url: ep, body } of postCalls) {
                             try {
                                 const resp = await fetch(ep, {
+                                    method: 'POST',
                                     credentials: 'include',
-                                    headers: {
-                                        'Accept': 'application/json, text/plain, */*',
-                                        'X-Requested-With': 'XMLHttpRequest',
-                                        'Referer': location.href,
-                                    }
+                                    headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
+                                    body
                                 });
-                                if (resp.ok) {
-                                    const ct = resp.headers.get('content-type') || '';
-                                    if (ct.includes('json')) {
-                                        const text = await resp.text();
-                                        if (text && text.length > 10) {
-                                            try { return { url: ep, data: JSON.parse(text) }; }
-                                            catch { return { url: ep, data: { rawText: text.substring(0, 500) } }; }
-                                        }
-                                    }
+                                const ct = resp.headers.get('content-type') || '';
+                                const text = await resp.text();
+                                results.push({ url: ep, status: resp.status, ct, text: text.substring(0, 300) });
+                                if (resp.ok && ct.includes('json') && text.length > 10) {
+                                    try { return { url: ep, data: JSON.parse(text) }; }
+                                    catch (_) {}
                                 }
-                            } catch (_) {}
+                            } catch (e) { results.push({ url: ep, error: e.message }); }
                         }
-                        return null;
+                        // GET fallbacks
+                        const getCalls = [
+                            `https://www.latamairlines.com/bff/retrieve-booking?locator=${loc}&lastName=${sob}`,
+                            `https://www.latamairlines.com/bff/retrieve-booking?identifier=${loc}&lastName=${sob}`,
+                        ];
+                        for (const ep of getCalls) {
+                            try {
+                                const resp = await fetch(ep, { credentials: 'include',
+                                    headers: { 'Accept': 'application/json' } });
+                                const ct = resp.headers.get('content-type') || '';
+                                const text = await resp.text();
+                                results.push({ url: ep, status: resp.status, ct, text: text.substring(0, 300) });
+                                if (resp.ok && ct.includes('json') && text.length > 10) {
+                                    try { return { url: ep, data: JSON.parse(text) }; }
+                                    catch (_) {}
+                                }
+                            } catch (e) { results.push({ url: ep, error: e.message }); }
+                        }
+                        return { results };
                     }, localizador, sobrenomeL);
                     if (latamBrowserResult?.data && Object.keys(latamBrowserResult.data).length > 2) {
                         apiData.push(latamBrowserResult);
                         console.log('[LATAM] Browser evaluate OK:', latamBrowserResult.url?.substring(0, 80));
                     } else {
-                        console.log('[LATAM] Browser evaluate: sem dados (CORS ou bloqueado)');
+                        console.log('[LATAM] Browser evaluate resultados:', JSON.stringify(latamBrowserResult?.results || []).substring(0, 600));
                     }
                 } catch (eBE) { console.warn('[LATAM] Browser evaluate erro:', eBE.message); }
             }
