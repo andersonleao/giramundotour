@@ -1500,62 +1500,72 @@ router.post('/capturar', async (req, res) => {
                 } catch (eCook) { console.warn('[LATAM] Cookies Puppeteer erro:', eCook.message); }
             }
 
-            // 2.6) page.evaluate: chama a API de booking de dentro do browser (com cookies reais + interceptor)
+            // 2.6) page.evaluate: chama /bff/mytrips/v1/order/ com headers LATAM corretos
+            // X-latam-App-Session-Id = UUID gerado 1x por sessão pelo SPA
+            // X-LATAM-TAB-ID = salvo no sessionStorage pelo SPA
+            // X-latam-Application-Country/Lang/Oc = BR, pt, BR
             if (!latamTemDados()) {
                 try {
                     const latamBrowserResult = await page.evaluate(async (loc, sob) => {
+                        // Gera UUID v4 simples
+                        const uuidv4 = () => 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, c => {
+                            const r = Math.random() * 16 | 0;
+                            return (c === 'x' ? r : (r & 0x3 | 0x8)).toString(16);
+                        });
+
+                        // Lê TAB_ID do sessionStorage (gerado pelo SPA ao inicializar)
+                        const tabId = window.sessionStorage.getItem('X-LATAM-TAB-ID') || uuidv4();
+                        const appSessionId = uuidv4(); // UUID gerado por sessão
+
+                        // Headers completos conforme análise do _app chunk
+                        const latamHeaders = {
+                            'Accept': 'application/json, text/plain, */*',
+                            'X-LATAM-TAB-ID': tabId,
+                            'X-latam-App-Session-Id': appSessionId,
+                            'X-latam-Request-Id': uuidv4(),
+                            'X-latam-Client-Name': 'xp-web-mytrips',
+                            'X-latam-Application-Country': 'BR',
+                            'X-latam-Application-Lang': 'pt',
+                            'X-latam-Application-Oc': 'BR',
+                            'X-latam-Application-Name': 'xp-web-mytrips',
+                            'X-latam-Application-Platform': 'web',
+                        };
+
                         const results = [];
-                        // POST para o endpoint confirmado (retorna 400 "Missing latam headers")
-                        const postCalls = [
-                            { url: 'https://www.latamairlines.com/bff/mytrips/retrieve',
-                              body: JSON.stringify({ identifier: loc, lastName: sob, market: 'BR', locale: 'pt-BR' }) },
-                            { url: 'https://www.latamairlines.com/bff/mytrips/retrieve',
-                              body: JSON.stringify({ locator: loc, lastName: sob }) },
+                        // Endpoint descoberto no código fonte do SPA:
+                        // getOrder: baseUrl + /bff/mytrips/v1/ + "order/id/:orderId/lastname/:lastname?origin=second-detail"
+                        const endpoints = [
+                            `https://www.latamairlines.com/bff/mytrips/v1/order/id/${loc}/lastname/${sob}?origin=second-detail`,
+                            `https://www.latamairlines.com/bff/mytrips/v1/order/id/LA${loc}/lastname/${sob}?origin=second-detail`,
+                            `https://www.latamairlines.com/bff/mytrips/v1/order/id/${loc}/lastname/${sob}`,
                         ];
-                        for (const { url: ep, body } of postCalls) {
+
+                        for (const ep of endpoints) {
                             try {
                                 const resp = await fetch(ep, {
-                                    method: 'POST',
                                     credentials: 'include',
-                                    headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
-                                    body
+                                    headers: latamHeaders
                                 });
                                 const ct = resp.headers.get('content-type') || '';
-                                const text = await resp.text();
-                                results.push({ url: ep, status: resp.status, ct, text: text.substring(0, 300) });
-                                if (resp.ok && ct.includes('json') && text.length > 10) {
-                                    try { return { url: ep, data: JSON.parse(text) }; }
+                                const txt = await resp.text();
+                                results.push({ ep: ep.substring(ep.indexOf('/bff/')), status: resp.status, ct: ct.substring(0,30), body: txt.substring(0, 400) });
+                                if (resp.ok && ct.includes('json') && txt.length > 20) {
+                                    try { return { url: ep, data: JSON.parse(txt) }; }
                                     catch (_) {}
                                 }
-                            } catch (e) { results.push({ url: ep, error: e.message }); }
+                            } catch (e) { results.push({ ep, error: e.message }); }
                         }
-                        // GET fallbacks
-                        const getCalls = [
-                            `https://www.latamairlines.com/bff/retrieve-booking?locator=${loc}&lastName=${sob}`,
-                            `https://www.latamairlines.com/bff/retrieve-booking?identifier=${loc}&lastName=${sob}`,
-                        ];
-                        for (const ep of getCalls) {
-                            try {
-                                const resp = await fetch(ep, { credentials: 'include',
-                                    headers: { 'Accept': 'application/json' } });
-                                const ct = resp.headers.get('content-type') || '';
-                                const text = await resp.text();
-                                results.push({ url: ep, status: resp.status, ct, text: text.substring(0, 300) });
-                                if (resp.ok && ct.includes('json') && text.length > 10) {
-                                    try { return { url: ep, data: JSON.parse(text) }; }
-                                    catch (_) {}
-                                }
-                            } catch (e) { results.push({ url: ep, error: e.message }); }
-                        }
-                        return { results };
+                        return { results, tabId };
                     }, localizador, sobrenomeL);
+
                     if (latamBrowserResult?.data && Object.keys(latamBrowserResult.data).length > 2) {
                         apiData.push(latamBrowserResult);
-                        console.log('[LATAM] Browser evaluate OK:', latamBrowserResult.url?.substring(0, 80));
+                        console.log('[LATAM] Browser evaluate v2 OK:', latamBrowserResult.url?.substring(0, 80));
                     } else {
-                        console.log('[LATAM] Browser evaluate resultados:', JSON.stringify(latamBrowserResult?.results || []).substring(0, 600));
+                        console.log('[LATAM] Browser evaluate v2 results:', JSON.stringify(latamBrowserResult?.results || []).substring(0, 800));
+                        console.log('[LATAM] TAB_ID do sessionStorage:', latamBrowserResult?.tabId);
                     }
-                } catch (eBE) { console.warn('[LATAM] Browser evaluate erro:', eBE.message); }
+                } catch (eBE) { console.warn('[LATAM] Browser evaluate v2 erro:', eBE.message); }
             }
 
             // 3) Captura estado JS da página (após renderização)
