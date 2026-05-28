@@ -587,12 +587,11 @@ const ReservasModule = {
                 App.showToast('Preencha o Localizador e Sobrenome', 'error');
                 return;
             }
-            // Extrai o PNR (localizador) do código fornecido:
-            // "LA9576350CFYB" → strip "LA" → "9576350CFYB" → letras finais → "CFYB"
-            // "CFYB" → já é o localizador
-            if (/^LA[A-Z0-9]{4,}$/i.test(input)) input = input.substring(2);
-            const pnrMatch = input.match(/([A-Z]{4,8})$/);
-            const localizador = pnrMatch ? pnrMatch[1] : input;
+            // Extrai o identificador LATAM:
+            // "LA9578032HXQU" → strip "LA" → "9578032HXQU" (usa o número completo)
+            // "HXQU" ou "CFYB" → usa como está (código curto sem prefixo LA)
+            if (/^LA/i.test(input)) input = input.substring(2);
+            const localizador = input;
             url = `https://www.latamairlines.com/br/pt/minhas-viagens?identifier=${localizador}&lastName=${encodeURIComponent(sobrenome)}`;
             dadosForm = { ...dadosForm, localizador, sobrenome, numeroPedido: input };
 

@@ -1035,9 +1035,9 @@ router.post('/capturar', async (req, res) => {
             let _sob = _uObj.searchParams.get('lastName') || _uObj.searchParams.get('lastname') || '';
             if (!_loc) {
                 let _oid = _uObj.searchParams.get('orderId') || '';
+                // Strip prefixo "LA" e usa o número completo (ex: LA9578032HXQU → 9578032HXQU)
                 if (/^LA/i.test(_oid)) _oid = _oid.substring(2);
-                const _m = _oid.match(/([A-Z]{4,8})$/);
-                _loc = _m ? _m[1] : _oid;
+                _loc = _oid;
             }
             if (_loc) {
                 url = `https://www.latamairlines.com/br/pt/minhas-viagens?identifier=${_loc}&lastName=${encodeURIComponent(_sob)}`;
@@ -1161,9 +1161,9 @@ router.post('/capturar', async (req, res) => {
             // Suporte ao formato antigo: second-detail?orderId=LA9576350CFYB&lastname=FRANCA
             if (!localizador) {
                 let orderId = urlObj.searchParams.get('orderId') || '';
-                if (/^LA/i.test(orderId)) orderId = orderId.substring(2); // strip LA
-                const m = orderId.match(/([A-Z]{4,8})$/);
-                localizador = m ? m[1] : orderId;
+                // Strip prefixo "LA" e usa o número completo (ex: LA9578032HXQU → 9578032HXQU)
+                if (/^LA/i.test(orderId)) orderId = orderId.substring(2);
+                localizador = orderId;
             }
             console.log(`[LATAM] localizador="${localizador}" sobrenome="${sobrenomeL}"`);
 
@@ -1182,27 +1182,60 @@ router.post('/capturar', async (req, res) => {
             };
 
             // 1) Tenta chamada direta à API LATAM (sem Puppeteer)
-            const latamApiUrls = [
+            // bff/mytrips/retrieve (POST) retorna 400 "Missing latam headers" — endpoint existe
+            // bff/retrieve-booking (GET) retorna 404 — testar ambos
+            const latamGetUrls = [
                 `https://www.latamairlines.com/bff/retrieve-booking?locator=${localizador}&lastName=${sobrenomeL}`,
                 `https://www.latamairlines.com/bff/retrieve-booking?pnr=${localizador}&lastName=${sobrenomeL}`,
                 `https://apimobile.tam.com.br/retrieve-booking/v1/bookings?pnr=${localizador}&lastName=${sobrenomeL}`,
             ];
-            for (const ep of latamApiUrls) {
+            const latamPostUrls = [
+                ['https://www.latamairlines.com/bff/mytrips/retrieve',
+                    JSON.stringify({ identifier: localizador, lastName: sobrenomeL, market: 'BR', locale: 'pt-BR' })],
+                ['https://www.latamairlines.com/bff/mytrips/retrieve',
+                    JSON.stringify({ locator: localizador, lastName: sobrenomeL })],
+                ['https://www.latamairlines.com/bff/retrieve-booking',
+                    JSON.stringify({ locator: localizador, lastName: sobrenomeL })],
+            ];
+            // GET endpoints
+            for (const ep of latamGetUrls) {
                 try {
                     const nr = await fetch(ep, { headers: latamBaseHeaders });
-                    console.log(`[LATAM] API direta HTTP ${nr.status}: ${ep}`);
+                    console.log(`[LATAM] GET HTTP ${nr.status}: ${ep.substring(0, 80)}`);
                     if (nr.ok) {
                         const ct = nr.headers.get('content-type') || '';
                         if (ct.includes('json')) {
                             const json = await nr.json();
                             if (json && Object.keys(json).length > 2) {
                                 apiData.push({ url: ep, data: json });
-                                console.log('[LATAM] API direta: dados obtidos!');
+                                console.log('[LATAM] GET direta: dados obtidos!');
                                 break;
                             }
                         }
                     }
-                } catch (eL) { console.warn('[LATAM] API direta erro:', eL.message); }
+                } catch (eL) { console.warn('[LATAM] GET erro:', eL.message); }
+            }
+            // POST endpoints (bff/mytrips/retrieve usa POST)
+            if (!apiData.length) {
+                const postHeaders = { ...latamBaseHeaders, 'Content-Type': 'application/json' };
+                for (const [ep, body] of latamPostUrls) {
+                    try {
+                        const nr = await fetch(ep, { method: 'POST', headers: postHeaders, body });
+                        const ct = nr.headers.get('content-type') || '';
+                        const txt = await nr.text();
+                        console.log(`[LATAM] POST HTTP ${nr.status} [${ct.substring(0,20)}]: ${ep.substring(0, 70)} | ${txt.substring(0,80)}`);
+                        if (nr.ok && ct.includes('json')) {
+                            try {
+                                const json = JSON.parse(txt);
+                                if (json && Object.keys(json).length > 2) {
+                                    apiData.push({ url: ep, data: json });
+                                    console.log('[LATAM] POST direta: dados obtidos!');
+                                    break;
+                                }
+                            } catch (_) {}
+                        }
+                    } catch (eL) { console.warn('[LATAM] POST erro:', eL.message); }
+                }
             }
 
             // Helper para verificar se já temos dados de booking suficientes
