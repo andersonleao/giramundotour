@@ -1349,67 +1349,71 @@ router.post('/capturar', async (req, res) => {
                         console.log('[LATAM] Dados de booking capturados durante page load — aguardando +2s');
                         await new Promise(r => setTimeout(r, 2000));
                     } else {
-                        // Tenta preencher o formulário com seletores específicos do xp-web-mytrips
-                        const locInput = await page.$(
-                            '[name="identifier"], [name="locator"], [placeholder*="localizador" i], ' +
-                            '[placeholder*="código" i], [placeholder*="reserva" i], [data-testid*="locator" i]'
-                        ).catch(() => null);
-                        const sobInput = await page.$(
-                            '[name="lastName"], [name="surname"], [placeholder*="sobrenome" i], ' +
-                            '[placeholder*="surname" i], [data-testid*="lastName" i]'
-                        ).catch(() => null);
+                        // Obtém info dos inputs via evaluate para diagnóstico
+                        const inputInfo = await page.evaluate(() => {
+                            const inputs = [...document.querySelectorAll('input:not([type=hidden])')];
+                            return inputs.map(el => ({
+                                name: el.name, id: el.id,
+                                placeholder: el.placeholder?.substring(0, 40),
+                                type: el.type
+                            }));
+                        }).catch(() => []);
+                        console.log('[LATAM] Inputs no DOM:', JSON.stringify(inputInfo));
 
-                        // Fallback: usa posição se seletores específicos não encontraram
-                        const inputs = await page.$$('input:not([type=hidden]):not([type=checkbox]):not([type=radio])');
-                        console.log(`[LATAM] Inputs: ${inputs.length} | específicos: loc=${!!locInput} sob=${!!sobInput}`);
+                        // Seletores específicos do xp-web-mytrips LATAM
+                        const SEL_LOC = '[name="identifier"],[name="locator"],[name="pnr"],[placeholder*="reserva" i],[placeholder*="compra" i],[placeholder*="código" i]';
+                        const SEL_SOB = '[name="lastName"],[name="surname"],[name="sobrenome"],[placeholder*="sobrenome" i],[placeholder*="surname" i]';
 
-                        // Usa nativeInputValueSetter para forçar React controlled inputs a aceitar o valor
-                        const formFilled = await page.evaluate((loc, sob) => {
-                            const setReactValue = (el, value) => {
-                                if (!el) return false;
-                                const proto = Object.getPrototypeOf(el);
-                                const nativeSetter = Object.getOwnPropertyDescriptor(proto, 'value')?.set ||
-                                                     Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')?.set;
-                                if (nativeSetter) nativeSetter.call(el, value);
-                                else el.value = value;
-                                el.dispatchEvent(new Event('input',  { bubbles: true }));
-                                el.dispatchEvent(new Event('change', { bubbles: true }));
-                                return true;
-                            };
+                        // Usa page.type() do Puppeteer — simula input nativo via CDP (não JS)
+                        // É mais autêntico que nativeInputValueSetter e dispara eventos React
+                        let locEl = await page.$(SEL_LOC).catch(() => null);
+                        let sobEl = await page.$(SEL_SOB).catch(() => null);
 
-                            const locEl = document.querySelector(
-                                '[name="identifier"],[name="locator"],[name="pnr"],' +
-                                '[placeholder*="localizador" i],[placeholder*="código" i],[placeholder*="reserva" i]'
-                            ) || document.querySelectorAll('input:not([type=hidden])')[0];
-                            const sobEl = document.querySelector(
-                                '[name="lastName"],[name="surname"],[name="sobrenome"],' +
-                                '[placeholder*="sobrenome" i],[placeholder*="surname" i]'
-                            ) || document.querySelectorAll('input:not([type=hidden])')[1];
+                        // Fallback por posição se seletores específicos não encontraram
+                        const allInputs = await page.$$('input:not([type=hidden]):not([type=checkbox]):not([type=radio])');
+                        console.log(`[LATAM] Total inputs: ${allInputs.length} | loc=${!!locEl} sob=${!!sobEl}`);
+                        if (!locEl && allInputs.length > 0) locEl = allInputs[0];
+                        if (!sobEl && allInputs.length > 1) sobEl = allInputs[1];
 
-                            const ok0 = setReactValue(locEl, loc);
-                            const ok1 = setReactValue(sobEl, sob);
+                        if (locEl) {
+                            await locEl.click({ clickCount: 3 });
+                            await new Promise(r => setTimeout(r, 150));
+                            await locEl.type(localizador, { delay: 80 });
+                            console.log('[LATAM] Localizador typed via page.type():', localizador);
+                            await new Promise(r => setTimeout(r, 400));
+                        }
+                        if (sobEl) {
+                            await sobEl.click({ clickCount: 3 });
+                            await new Promise(r => setTimeout(r, 150));
+                            await sobEl.type(sobrenomeL, { delay: 80 });
+                            console.log('[LATAM] Sobrenome typed via page.type():', sobrenomeL);
+                            await new Promise(r => setTimeout(r, 500));
+                        }
 
-                            if (sobEl) {
-                                sobEl.focus();
-                                sobEl.dispatchEvent(new KeyboardEvent('keydown',  { key: 'Enter', keyCode: 13, bubbles: true }));
-                                sobEl.dispatchEvent(new KeyboardEvent('keypress', { key: 'Enter', keyCode: 13, bubbles: true }));
-                                sobEl.dispatchEvent(new KeyboardEvent('keyup',    { key: 'Enter', keyCode: 13, bubbles: true }));
-                            }
-
+                        // Clica no botão de busca ou pressiona Enter
+                        const btnSel = await page.evaluate(() => {
                             const btn = [...document.querySelectorAll('button,[type="submit"]')]
-                                .find(b => /buscar|consultar|procurar|continuar|search/i.test(b.textContent || b.getAttribute('aria-label') || ''));
-                            if (btn) btn.click();
+                                .find(b => /procurar|buscar|search|continuar/i.test(b.textContent || b.getAttribute('aria-label') || ''));
+                            return btn ? { found: true, text: btn.textContent?.trim() } : { found: false };
+                        });
+                        console.log('[LATAM] Botão busca:', JSON.stringify(btnSel));
 
-                            return {
-                                locName: locEl?.name || locEl?.placeholder || '?',
-                                sobName: sobEl?.name || sobEl?.placeholder || '?',
-                                totalInputs: document.querySelectorAll('input').length,
-                                ok0, ok1,
-                                btnText: btn?.textContent?.trim() || '(nenhum)'
-                            };
-                        }, localizador, sobrenomeL);
-
-                        console.log('[LATAM] Form React preenchido:', JSON.stringify(formFilled));
+                        if (btnSel.found) {
+                            // page.click() usa CDP (mais autêntico que btn.click() dentro de evaluate)
+                            await page.evaluate(() => {
+                                const btn = [...document.querySelectorAll('button,[type="submit"]')]
+                                    .find(b => /procurar|buscar|search|continuar/i.test(b.textContent || b.getAttribute('aria-label') || ''));
+                                if (btn) {
+                                    const rect = btn.getBoundingClientRect();
+                                    return { x: rect.x + rect.width/2, y: rect.y + rect.height/2 };
+                                }
+                            }).then(async coords => {
+                                if (coords) await page.mouse.click(coords.x, coords.y);
+                            }).catch(() => {});
+                        }
+                        // Também pressiona Enter globalmente
+                        await page.keyboard.press('Enter');
+                        console.log('[LATAM] Enter pressionado');
 
                         // Aguarda resposta da API após submit
                         try {
