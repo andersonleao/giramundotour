@@ -173,6 +173,62 @@ const ReservasModule = {
                             </div>
                         </div>
 
+                        <!-- Modal complemento LATAM (aparece quando importação automática falha) -->
+                        <div class="modal fade" id="modalComplementoLatam" tabindex="-1" aria-hidden="true">
+                            <div class="modal-dialog modal-dialog-centered">
+                                <div class="modal-content">
+                                    <div class="modal-header py-2" style="background:#D41026;">
+                                        <h6 class="modal-title mb-0 text-white">
+                                            <i class="bi bi-airplane"></i> LATAM — Complementar dados
+                                        </h6>
+                                    </div>
+                                    <div class="modal-body">
+                                        <p class="text-muted small mb-3">
+                                            Localizador: <strong id="latamModalLoc"></strong> &nbsp;|&nbsp;
+                                            Passageiro: <strong id="latamModalPax"></strong>
+                                        </p>
+                                        <div class="row g-3">
+                                            <div class="col-md-6">
+                                                <label class="form-label fw-semibold">Origem <span class="text-danger">*</span></label>
+                                                <select class="form-select" id="latamModalOrigem">
+                                                    <option value="">Selecione...</option>
+                                                    ${optsAeroportos}
+                                                </select>
+                                            </div>
+                                            <div class="col-md-6">
+                                                <label class="form-label fw-semibold">Destino <span class="text-danger">*</span></label>
+                                                <select class="form-select" id="latamModalDestino">
+                                                    <option value="">Selecione...</option>
+                                                    ${optsAeroportos}
+                                                </select>
+                                            </div>
+                                            <div class="col-md-6">
+                                                <label class="form-label fw-semibold">Data de Ida <span class="text-danger">*</span></label>
+                                                <input type="date" class="form-control" id="latamModalDataIda">
+                                            </div>
+                                            <div class="col-md-6">
+                                                <label class="form-label fw-semibold">Data de Volta</label>
+                                                <input type="date" class="form-control" id="latamModalDataVolta">
+                                            </div>
+                                            <div class="col-md-12">
+                                                <label class="form-label fw-semibold">Nº do Voo IDA</label>
+                                                <input type="text" class="form-control text-uppercase" id="latamModalVoo"
+                                                       placeholder="Ex: LA3050">
+                                            </div>
+                                        </div>
+                                    </div>
+                                    <div class="modal-footer py-2">
+                                        <button type="button" class="btn btn-secondary btn-sm"
+                                                data-bs-dismiss="modal">Cancelar</button>
+                                        <button type="button" class="btn btn-danger btn-sm"
+                                                onclick="ReservasModule._salvarComplementoLatam()">
+                                            <i class="bi bi-check-circle"></i> Salvar reserva LATAM
+                                        </button>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
                         <!-- VoeGOL: dados manuais (sem Puppeteer) -->
                         <!-- GOL: localizador + sobrenome + origem — busca automática via Puppeteer -->
                         <div id="camposGol" style="display:none;">
@@ -635,6 +691,15 @@ const ReservasModule = {
             );
 
             if (overlay) overlay.style.display = 'none';
+
+            // LATAM: se a importação automática falhou (campos vazios), abre modal de complemento
+            if (cia === 'latam' && !bilhete.dataIda && !bilhete.origem && !bilhete.destino) {
+                const localizador = dadosForm.localizador || dadosForm.numeroPedido || '';
+                const sobrenome   = dadosForm.sobrenome || '';
+                this._abrirComplementoLatam(localizador, sobrenome, url,
+                    document.getElementById('reservaEmitidoPor')?.value || '');
+                return;
+            }
 
             const locChave = (dadosForm.localizador || dadosForm.numeroPedido || '').toUpperCase();
             const todas     = Storage.getReservas();
@@ -1385,6 +1450,85 @@ const ReservasModule = {
             reservaFinal = Storage.addReserva({ ...dadosReserva, clienteId: '', fornecedorId: '', valorVenda: 0, custos: 0, saldo: 0, dataEmissao: new Date().toISOString(), _savedInDb: false });
             this._registrarAlerta(reservaFinal);
             App.showToast('Reserva Azul salva!', 'success');
+        }
+        this.carregarGrid();
+    },
+
+    _abrirComplementoLatam(localizador, sobrenome, urlReserva, emitidoPor) {
+        document.getElementById('latamModalLoc').textContent = localizador;
+        document.getElementById('latamModalPax').textContent = sobrenome || '(não identificado)';
+        document.getElementById('latamModalOrigem').value   = '';
+        document.getElementById('latamModalDestino').value  = '';
+        document.getElementById('latamModalDataIda').value  = '';
+        document.getElementById('latamModalDataVolta').value = '';
+        document.getElementById('latamModalVoo').value      = '';
+        const modal = document.getElementById('modalComplementoLatam');
+        modal.dataset.localizador = localizador;
+        modal.dataset.sobrenome   = sobrenome;
+        modal.dataset.urlReserva  = urlReserva;
+        modal.dataset.emitidoPor  = emitidoPor || '';
+        new bootstrap.Modal(modal).show();
+    },
+
+    _salvarComplementoLatam() {
+        const modal       = document.getElementById('modalComplementoLatam');
+        const localizador = modal.dataset.localizador;
+        const sobrenome   = modal.dataset.sobrenome;
+        const urlReserva  = modal.dataset.urlReserva;
+        const emitidoPor  = modal.dataset.emitidoPor || '';
+
+        const origem   = document.getElementById('latamModalOrigem').value;
+        const destino  = document.getElementById('latamModalDestino').value;
+        const dataIda  = document.getElementById('latamModalDataIda').value;
+        const dataVolta = document.getElementById('latamModalDataVolta').value;
+        const voo      = document.getElementById('latamModalVoo').value.trim().toUpperCase();
+
+        if (!origem || !destino || !dataIda) {
+            App.showToast('Preencha Origem, Destino e Data de Ida', 'error');
+            return;
+        }
+
+        bootstrap.Modal.getInstance(modal)?.hide();
+
+        const bilhete = {
+            companhia: 'LA', codigoReserva: localizador,
+            passageiroNome: sobrenome || '',
+            origem, destino, dataIda, dataVolta: dataVolta || '',
+            horaPartida: '', horaChegada: '', _horaPartidaVolta: '', _horaChegadaVolta: '',
+            numeroVoo: voo, _numeroVooVolta: '', cabine: '', bagagem: '',
+            dataEmissao: new Date().toISOString(),
+            trechos: [{ tipo: 'ida', data: dataIda, origem, destino, companhia: 'LA', voo, horaPartida: '', horaChegada: '' }]
+        };
+        if (dataVolta) bilhete.trechos.push({ tipo: 'volta', data: dataVolta, origem: destino, destino: origem, companhia: 'LA', voo: '', horaPartida: '', horaChegada: '' });
+
+        const locChave   = localizador.toUpperCase();
+        const todas      = Storage.getReservas();
+        const jaExiste   = todas.find(r => r.localizador?.toUpperCase() === locChave && r.companhia === 'latam');
+        const jaExisteDb = this._dbReservas.find(r => r.localizador?.toUpperCase() === locChave && r.companhia === 'latam');
+        const dadosReserva = {
+            companhia: 'latam', localizador, dataIda, dataVolta: dataVolta || '',
+            origem, destino, urlReserva, _bilhete: bilhete, emitidoPor
+        };
+
+        let reservaFinal;
+        const idDb = jaExisteDb?.id || (jaExiste?._savedInDb ? jaExiste.id : null);
+        if (jaExiste || jaExisteDb) {
+            if (jaExiste) { Storage.updateReserva(jaExiste.id, dadosReserva); reservaFinal = { ...jaExiste, ...dadosReserva }; }
+            if (jaExisteDb) {
+                const dbIdx = this._dbReservas.findIndex(r => r.id === jaExisteDb.id);
+                if (dbIdx !== -1) this._dbReservas[dbIdx] = { ...this._dbReservas[dbIdx], ...dadosReserva, _bilhete: bilhete, _savedInDb: true };
+            }
+            if (idDb) {
+                fetch(`/api/reservas/${idDb}`, {
+                    method: 'PUT', headers: this._authHeaders(),
+                    body: JSON.stringify({ dataIda, dataVolta: dataVolta || null, origem, destino, urlReserva, bilhete: JSON.stringify(bilhete) })
+                }).catch(e => console.warn('[LATAM] Erro ao atualizar:', e.message));
+            }
+            App.showToast('Reserva LATAM atualizada!', 'success');
+        } else {
+            reservaFinal = Storage.addReserva({ ...dadosReserva, clienteId: '', fornecedorId: '', valorVenda: 0, custos: 0, saldo: 0, dataEmissao: new Date().toISOString(), _savedInDb: false });
+            this._registrarAlerta(reservaFinal);
+            App.showToast('Reserva LATAM salva!', 'success');
         }
         this.carregarGrid();
     },

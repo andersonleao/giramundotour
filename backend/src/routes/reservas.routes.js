@@ -974,38 +974,6 @@ router.post('/capturar', async (req, res) => {
         await page.setViewport({ width: 1366, height: 768 });
 
         const apiData = [];
-        // Intercepta requisições de saída LATAM para capturar URL/headers usados pelo SPA
-        const _latamReqCapture = [];
-        if (isLatam) {
-            page.on('request', req => {
-                const u = req.url();
-                if (!u.includes('latamairlines.com')) return;
-                if (u.includes('MX8t95') || u.includes('go-mpulse') || u.includes('/locales/')) return;
-                _latamReqCapture.push({
-                    method:  req.method(),
-                    url:     u,
-                    headers: req.headers(),
-                    body:    req.postData()
-                });
-                console.log(`[LATAM REQ] ${req.method()} ${u.substring(0, 120)}`);
-                console.log(`[LATAM REQ HEADERS] ${JSON.stringify(req.headers()).substring(0, 300)}`);
-            });
-        }
-        // Captura logs do console do browser (inclui __LATAM_FETCH__ do interceptor)
-        const _consoleLogs = [];
-        if (isLatam) {
-            page.on('console', msg => {
-                const txt = msg.text();
-                if (txt.startsWith('__LATAM_FETCH__:')) {
-                    try {
-                        const info = JSON.parse(txt.substring('__LATAM_FETCH__:'.length));
-                        _consoleLogs.push(info);
-                        console.log('[LATAM FETCH INTERCEPTADO]', info.method, info.url.substring(0, 100));
-                        console.log('[LATAM FETCH HEADERS]', JSON.stringify(info.headers).substring(0, 400));
-                    } catch (_) {}
-                }
-            });
-        }
         page.on('response', async response => {
             const ct = response.headers()['content-type'] || '';
             if (!ct.includes('application/json')) return;
@@ -1058,52 +1026,6 @@ router.post('/capturar', async (req, res) => {
             } catch (fsErr) {
                 console.warn('[GOL] FlareSolverr indisponível, tentando sem bypass:', fsErr.message);
             }
-        }
-
-        // LATAM: injeta interceptor de fetch + XHR para capturar URL+headers usados pelo SPA
-        if (isLatam) {
-            await page.evaluateOnNewDocument(() => {
-                const _log = (method, url, headers, body) => {
-                    if (!url.includes('latamairlines.com')) return;
-                    if (url.includes('MX8t95') || url.includes('/locales/') || url.includes('go-mpulse')) return;
-                    console.log('__LATAM_FETCH__:' + JSON.stringify({ method, url, headers, body }));
-                };
-
-                // Intercept fetch
-                const _origFetch = window.fetch;
-                window.fetch = async function(...args) {
-                    const req = args[0];
-                    const opts = args[1] || {};
-                    const u = typeof req === 'string' ? req : req?.url || '';
-                    const hdrs = {};
-                    if (opts.headers) {
-                        if (opts.headers instanceof Headers) {
-                            opts.headers.forEach((v, k) => { hdrs[k] = v; });
-                        } else { Object.assign(hdrs, opts.headers); }
-                    }
-                    _log(opts.method || 'GET', u, hdrs, typeof opts.body === 'string' ? opts.body.substring(0, 500) : null);
-                    return _origFetch.apply(this, args);
-                };
-
-                // Intercept XHR
-                const _origOpen  = XMLHttpRequest.prototype.open;
-                const _origSend  = XMLHttpRequest.prototype.send;
-                const _origSetHdr = XMLHttpRequest.prototype.setRequestHeader;
-                XMLHttpRequest.prototype.open = function(method, url, ...rest) {
-                    this._interceptMethod = method;
-                    this._interceptUrl    = url;
-                    this._interceptHdrs   = {};
-                    return _origOpen.apply(this, [method, url, ...rest]);
-                };
-                XMLHttpRequest.prototype.setRequestHeader = function(name, value) {
-                    if (this._interceptHdrs) this._interceptHdrs[name] = value;
-                    return _origSetHdr.apply(this, [name, value]);
-                };
-                XMLHttpRequest.prototype.send = function(body) {
-                    _log(this._interceptMethod || 'GET', this._interceptUrl || '', this._interceptHdrs || {}, body?.substring?.(0, 500) || null);
-                    return _origSend.apply(this, [body]);
-                };
-            }).catch(e => console.warn('[LATAM] evaluateOnNewDocument erro:', e.message));
         }
 
         // LATAM: transforma URL second-detail → pública ANTES de navegar (evita dois page.goto competindo)
@@ -1231,435 +1153,99 @@ router.post('/capturar', async (req, res) => {
             }
 
         } else if (isLatam) {
-            // LATAM: usa fluxo público /minhas-viagens com localizador+sobrenome (sem auth)
+            // LATAM: tenta API direta (protegida por Akamai + reCAPTCHA v3 Enterprise)
+            // Se falhar → frontend abre modal de complemento para preenchimento manual
             const urlObj = new URL(url);
             let localizador = urlObj.searchParams.get('identifier') || '';
             let sobrenomeL  = urlObj.searchParams.get('lastName') || urlObj.searchParams.get('lastname') || '';
-
-            // Suporte ao formato antigo: second-detail?orderId=LA9576350CFYB&lastname=FRANCA
             if (!localizador) {
                 let orderId = urlObj.searchParams.get('orderId') || '';
-                // Strip prefixo "LA" e usa o número completo (ex: LA9578032HXQU → 9578032HXQU)
                 if (/^LA/i.test(orderId)) orderId = orderId.substring(2);
                 localizador = orderId;
             }
             console.log(`[LATAM] localizador="${localizador}" sobrenome="${sobrenomeL}"`);
 
-            const latamBaseHeaders = {
+            const { randomUUID } = require('crypto');
+            const latamH = {
                 'Accept': 'application/json, text/plain, */*',
-                'Accept-Language': 'pt-BR,pt;q=0.9,en-US;q=0.8,en;q=0.7',
+                'Accept-Language': 'pt-BR,pt;q=0.9',
                 'Origin': 'https://www.latamairlines.com',
-                'Referer': 'https://www.latamairlines.com/br/pt/minhas-viagens',
+                'Referer': url,
                 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
-                'sec-ch-ua': '"Chromium";v="124", "Google Chrome";v="124", "Not-A.Brand";v="99"',
-                'sec-ch-ua-mobile': '?0',
-                'sec-ch-ua-platform': '"Windows"',
-                'sec-fetch-dest': 'empty',
-                'sec-fetch-mode': 'cors',
-                'sec-fetch-site': 'same-origin',
+                'X-LATAM-TAB-ID': randomUUID(),
+                'X-latam-App-Session-Id': randomUUID(),
+                'X-latam-Request-Id': randomUUID(),
+                'X-latam-Client-Name': 'xp-web-mytrips',
+                'X-latam-Application-Country': 'BR',
+                'X-latam-Application-Lang': 'pt',
+                'X-latam-Application-Oc': 'BR',
+                'X-latam-Application-Name': 'xp-web-mytrips',
             };
 
-            // 1) Tenta chamada direta à API LATAM (sem Puppeteer)
-            // bff/mytrips/retrieve (POST) retorna 400 "Missing latam headers" — endpoint existe
-            // bff/retrieve-booking (GET) retorna 404 — testar ambos
-            const latamGetUrls = [
-                `https://www.latamairlines.com/bff/retrieve-booking?locator=${localizador}&lastName=${sobrenomeL}`,
-                `https://www.latamairlines.com/bff/retrieve-booking?pnr=${localizador}&lastName=${sobrenomeL}`,
-                `https://apimobile.tam.com.br/retrieve-booking/v1/bookings?pnr=${localizador}&lastName=${sobrenomeL}`,
+            // Tenta endpoints da API LATAM (Endpoint confirmado via análise do _app chunk)
+            // GET /bff/mytrips/v1/order/id/:orderId/lastname/:lastname?origin=second-detail
+            // Bloqueado por Akamai Bot Manager + reCAPTCHA — retorna 400 "Missing latam headers"
+            // Se funcionar (ex: se os cookies da sessão forem válidos), retorna os dados do booking
+            const latamEps = [
+                `https://www.latamairlines.com/bff/mytrips/v1/order/id/${localizador}/lastname/${sobrenomeL}?origin=second-detail`,
+                `https://www.latamairlines.com/bff/mytrips/v1/order/id/LA${localizador}/lastname/${sobrenomeL}?origin=second-detail`,
             ];
-            const latamPostUrls = [
-                ['https://www.latamairlines.com/bff/mytrips/retrieve',
-                    JSON.stringify({ identifier: localizador, lastName: sobrenomeL, market: 'BR', locale: 'pt-BR' })],
-                ['https://www.latamairlines.com/bff/mytrips/retrieve',
-                    JSON.stringify({ locator: localizador, lastName: sobrenomeL })],
-                ['https://www.latamairlines.com/bff/retrieve-booking',
-                    JSON.stringify({ locator: localizador, lastName: sobrenomeL })],
-            ];
-            // GET endpoints
-            for (const ep of latamGetUrls) {
+            for (const ep of latamEps) {
                 try {
-                    const nr = await fetch(ep, { headers: latamBaseHeaders });
-                    console.log(`[LATAM] GET HTTP ${nr.status}: ${ep.substring(0, 80)}`);
+                    const nr = await fetch(ep, { headers: latamH, signal: AbortSignal.timeout(6000) });
+                    console.log(`[LATAM] API HTTP ${nr.status}: ${ep.substring(40,90)}`);
                     if (nr.ok) {
                         const ct = nr.headers.get('content-type') || '';
                         if (ct.includes('json')) {
                             const json = await nr.json();
                             if (json && Object.keys(json).length > 2) {
                                 apiData.push({ url: ep, data: json });
-                                console.log('[LATAM] GET direta: dados obtidos!');
+                                console.log('[LATAM] API direta: dados obtidos!');
                                 break;
                             }
                         }
                     }
-                } catch (eL) { console.warn('[LATAM] GET erro:', eL.message); }
+                } catch (eL) { console.warn('[LATAM] API erro:', eL.message); }
             }
-            // POST endpoints (bff/mytrips/retrieve usa POST)
+
+            // Tenta via browser context (com cookies Akamai da sessão)
             if (!apiData.length) {
-                const postHeaders = { ...latamBaseHeaders, 'Content-Type': 'application/json' };
-                for (const [ep, body] of latamPostUrls) {
-                    try {
-                        const nr = await fetch(ep, { method: 'POST', headers: postHeaders, body });
-                        const ct = nr.headers.get('content-type') || '';
-                        const txt = await nr.text();
-                        console.log(`[LATAM] POST HTTP ${nr.status} [${ct.substring(0,20)}]: ${ep.substring(0, 70)} | ${txt.substring(0,80)}`);
-                        if (nr.ok && ct.includes('json')) {
-                            try {
-                                const json = JSON.parse(txt);
-                                if (json && Object.keys(json).length > 2) {
-                                    apiData.push({ url: ep, data: json });
-                                    console.log('[LATAM] POST direta: dados obtidos!');
-                                    break;
-                                }
-                            } catch (_) {}
-                        }
-                    } catch (eL) { console.warn('[LATAM] POST erro:', eL.message); }
-                }
-            }
-
-            // Helper para verificar se já temos dados de booking suficientes
-            const latamTemDados = () => apiData.some(e =>
-                e.url !== 'dom://latam-window-state' &&
-                e.data && typeof e.data === 'object' && Object.keys(e.data).length > 3
-            );
-
-            if (!latamTemDados()) {
-                // 2) Puppeteer: aguarda a página carregar e tenta preencher o formulário
-                const latamJsonFilter = resp => {
-                    const u  = resp.url();
-                    const ct = resp.headers()['content-type'] || '';
-                    return u.includes('latamairlines.com') &&
-                           !u.includes('go-mpulse') && !u.includes('config.json') &&
-                           !u.includes('/MX8t95') && !u.includes('akamai') &&
-                           !u.includes('/locales/') && !u.includes('/_next/static/') &&
-                           ct.includes('application/json');
-                };
-
                 try {
-                    // Aguarda a página carregar inputs (formulário ou booking já carregado)
-                    await page.waitForSelector('input, [data-testid="mytrips"]', { timeout: 30000 });
-                    await new Promise(r => setTimeout(r, 2000 + Math.random() * 1000));
-
-                    // Verifica se alguma resposta de BOOKING LATAM chegou durante o carregamento
-                    // (exclui arquivos estáticos como locales/common.json, config.json, analytics)
-                    const jaRespondeu = apiData.some(e =>
-                        e.url?.includes('latamairlines.com') &&
-                        !e.url.includes('/locales/') && !e.url.includes('config.json') &&
-                        !e.url.includes('/MX8t95') && !e.url.includes('go-mpulse')
-                    );
-                    if (jaRespondeu) {
-                        console.log('[LATAM] Dados de booking capturados durante page load — aguardando +2s');
-                        await new Promise(r => setTimeout(r, 2000));
-                    } else {
-                        // Aceita o cookie consent banner (pode bloquear o clique no botão)
-                        try {
-                            const cookieAccepted = await page.evaluate(() => {
-                                // Busca botão de aceitar cookies (common patterns)
-                                const patterns = [
-                                    'button[id*="accept"], button[id*="cookie"], button[id*="consent"]',
-                                    'button[class*="accept"], button[class*="cookie"], button[class*="consent"]',
-                                    '[data-testid*="accept"], [data-testid*="cookie"]',
-                                ];
-                                for (const sel of patterns) {
-                                    const btn = document.querySelector(sel);
-                                    if (btn) { btn.click(); return 'clicked: ' + btn.textContent?.trim().substring(0,30); }
-                                }
-                                // Busca por texto
-                                const cookieBtn = [...document.querySelectorAll('button')]
-                                    .find(b => /aceitar|accept|concordar|agree|allow.*cookie|permitir/i.test(b.textContent || ''));
-                                if (cookieBtn) { cookieBtn.click(); return 'text: ' + cookieBtn.textContent?.trim().substring(0,30); }
-                                return null;
-                            });
-                            if (cookieAccepted) console.log('[LATAM] Cookie banner:', cookieAccepted);
-                            else console.log('[LATAM] Cookie banner: não encontrado (OK)');
-                        } catch (_) {}
-
-                        await new Promise(r => setTimeout(r, 500));
-
-                        // Obtém info dos inputs via evaluate para diagnóstico
-                        const inputInfo = await page.evaluate(() => {
-                            const inputs = [...document.querySelectorAll('input:not([type=hidden])')];
-                            return inputs.map(el => ({
-                                name: el.name, id: el.id,
-                                placeholder: el.placeholder?.substring(0, 40),
-                                type: el.type
-                            }));
-                        }).catch(() => []);
-                        console.log('[LATAM] Inputs no DOM:', JSON.stringify(inputInfo));
-
-                        // Abordagem React fiber: chama o onChange handler diretamente
-                        // Isso atualiza o estado React interno, o que simpleInput/nativeValueSetter não conseguem
-                        const reactFiberFill = await page.evaluate((loc, sob) => {
-                            const triggerReactChange = (el, value) => {
-                                if (!el) return false;
-                                // Encontra o React fiber/interno do elemento
-                                const rKey = Object.keys(el).find(k =>
-                                    k.startsWith('__reactFiber') || k.startsWith('__reactInternalInstance') || k.startsWith('__reactProps')
-                                );
-                                if (!rKey) return false;
-
-                                if (rKey.startsWith('__reactProps')) {
-                                    // React 18: props diretamente no elemento
-                                    const props = el[rKey];
-                                    if (props?.onChange) {
-                                        props.onChange({ target: { value }, currentTarget: { value }, nativeEvent: { target: { value } } });
-                                        return true;
-                                    }
-                                } else {
-                                    // React 16/17: navega pelo fiber
-                                    let fiber = el[rKey];
-                                    while (fiber) {
-                                        const props = fiber.memoizedProps;
-                                        if (props?.onChange) {
-                                            // Também seta o valor DOM primeiro (para displayar)
-                                            const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')?.set;
-                                            if (setter) setter.call(el, value);
-                                            props.onChange({ target: el, currentTarget: el, nativeEvent: { target: el, value } });
-                                            return true;
-                                        }
-                                        fiber = fiber.return;
-                                    }
-                                }
-                                return false;
-                            };
-
-                            const allInputs = [...document.querySelectorAll('input:not([type=hidden])')];
-                            const locEl = document.querySelector('[name="identifier"],[name="locator"],[name="pnr"],[placeholder*="reserva" i],[placeholder*="compra" i]') || allInputs[0];
-                            const sobEl = document.querySelector('[name="lastName"],[name="surname"],[placeholder*="sobrenome" i]') || allInputs[1];
-
-                            const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')?.set;
-                            // Seta via DOM primeiro
-                            if (locEl && setter) setter.call(locEl, loc);
-                            if (sobEl && setter) setter.call(sobEl, sob);
-
-                            // Dispara onChange via React fiber
-                            const okLoc = triggerReactChange(locEl, loc);
-                            const okSob = triggerReactChange(sobEl, sob);
-
-                            // Dispara eventos de change/blur para garantir validação
-                            [locEl, sobEl].filter(Boolean).forEach(el => {
-                                el.dispatchEvent(new Event('input',  { bubbles: true }));
-                                el.dispatchEvent(new Event('change', { bubbles: true }));
-                                el.dispatchEvent(new Event('blur',   { bubbles: true }));
-                            });
-
-                            return {
-                                okLoc, okSob,
-                                locName: locEl?.name || locEl?.placeholder,
-                                sobName: sobEl?.name || sobEl?.placeholder,
-                                inputs: allInputs.length,
-                                locVal: locEl?.value,
-                                sobVal: sobEl?.value,
-                            };
-                        }, localizador, sobrenomeL);
-                        console.log('[LATAM] React fiber fill:', JSON.stringify(reactFiberFill));
-
-                        await new Promise(r => setTimeout(r, 800));
-
-                        // Aguarda reCAPTCHA inicializar (carregado pelo Next.js chunk)
-                        await page.waitForFunction(
-                            () => !!(window.grecaptcha?.enterprise || window.grecaptcha?.ready),
-                            { timeout: 8000 }
-                        ).catch(() => console.warn('[LATAM] reCAPTCHA não carregou em 8s'));
-
-                        await new Promise(r => setTimeout(r, 500));
-
-                        // Scroll para o botão + clique via coordenadas (mais real que btn.click())
-                        const btnCoords = await page.evaluate(() => {
-                            const btn = [...document.querySelectorAll('button,[type="submit"]')]
-                                .find(b => /procurar|buscar|search|continuar/i.test(b.textContent || b.getAttribute('aria-label') || ''));
-                            if (!btn) return null;
-                            btn.scrollIntoView({ behavior: 'smooth', block: 'center' });
-                            const r = btn.getBoundingClientRect();
-                            return { x: r.x + r.width/2, y: r.y + r.height/2, text: btn.textContent?.trim() };
-                        });
-                        console.log('[LATAM] Botão coords:', JSON.stringify(btnCoords));
-
-                        await new Promise(r => setTimeout(r, 500));
-
-                        if (btnCoords) {
-                            await page.mouse.click(btnCoords.x, btnCoords.y);
-                        }
-                        await page.keyboard.press('Enter');
-                        console.log('[LATAM] Enter pressionado (reCAPTCHA deve ter executado)');
-
-                        // Aguarda resposta da API após submit
-                        try {
-                            await page.waitForResponse(latamJsonFilter, { timeout: 25000 });
-                            console.log('[LATAM] API respondeu após submit — aguardando +3s');
-                            await new Promise(r => setTimeout(r, 3000));
-                        } catch (_) {
-                            console.warn('[LATAM] API não respondeu em 25s — aguardando DOM...');
-                            await new Promise(r => setTimeout(r, 4000));
-                        }
-                    }
-                } catch (e) {
-                    console.warn('[LATAM] Formulário:', e.message, '— aguardando resposta automática...');
-                    try {
-                        await page.waitForResponse(latamJsonFilter, { timeout: 12000 });
-                        await new Promise(r => setTimeout(r, 2000));
-                    } catch (_) {
-                        await new Promise(r => setTimeout(r, 3000));
-                    }
-                }
-            }
-
-            // 2.4) Replica a chamada capturada pelo interceptor fetch (URL + headers exatos do SPA)
-            if (!latamTemDados() && _consoleLogs.length > 0) {
-                const lastReq = _consoleLogs[_consoleLogs.length - 1];
-                console.log('[LATAM] Replicando chamada interceptada:', lastReq.method, lastReq.url?.substring(0, 100));
-                try {
-                    const akamaiCookies = await page.cookies();
-                    const cookieStr = akamaiCookies.map(c => `${c.name}=${c.value}`).join('; ');
-                    const replicaHeaders = {
-                        ...lastReq.headers,
-                        'Cookie': cookieStr,
-                        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
-                    };
-                    const fetchOpts = {
-                        method: lastReq.method || 'GET',
-                        headers: replicaHeaders,
-                    };
-                    if (lastReq.body) fetchOpts.body = lastReq.body;
-                    const nr = await fetch(lastReq.url, fetchOpts);
-                    const ct = nr.headers.get('content-type') || '';
-                    console.log(`[LATAM] Replica HTTP ${nr.status} [${ct.substring(0, 20)}]`);
-                    if (nr.ok && ct.includes('json')) {
-                        const json = await nr.json();
-                        if (json && Object.keys(json).length > 2) {
-                            apiData.push({ url: lastReq.url, data: json });
-                            console.log('[LATAM] Replica: dados obtidos!');
-                        }
-                    }
-                } catch (eRep) { console.warn('[LATAM] Replica erro:', eRep.message); }
-            }
-
-            // 2.5) Cookie-based fetch: usa cookies Akamai da sessão Puppeteer para chamar a API diretamente
-            // Isso pode funcionar porque os cookies _abck/bm_sz foram gerados pelo browser real
-            if (!latamTemDados()) {
-                try {
-                    const akamaiCookies = await page.cookies();
-                    if (akamaiCookies.length > 0) {
-                        const cookieStr = akamaiCookies.map(c => `${c.name}=${c.value}`).join('; ');
-                        const cookieHeaders = { ...latamBaseHeaders, 'Cookie': cookieStr };
-                        const cookieEps = [
-                            `https://www.latamairlines.com/bff/retrieve-booking?locator=${localizador}&lastName=${sobrenomeL}`,
-                            `https://www.latamairlines.com/pt-br/xp-web-mytrips/api/retrieve?identifier=${localizador}&lastName=${sobrenomeL}`,
-                            `https://www.latamairlines.com/bff/retrieve-booking?identifier=${localizador}&lastName=${sobrenomeL}`,
-                        ];
-                        for (const ep of cookieEps) {
-                            try {
-                                const nr = await fetch(ep, { headers: cookieHeaders });
-                                console.log(`[LATAM] Cookie-fetch HTTP ${nr.status}: ${ep.substring(0, 100)}`);
-                                if (nr.ok) {
-                                    const ct = nr.headers.get('content-type') || '';
-                                    if (ct.includes('json')) {
-                                        const json = await nr.json();
-                                        if (json && Object.keys(json).length > 2) {
-                                            apiData.push({ url: ep, data: json });
-                                            console.log('[LATAM] Cookie-fetch: dados obtidos!');
-                                            break;
-                                        }
-                                    }
-                                }
-                            } catch (eC) { console.warn('[LATAM] Cookie-fetch erro:', eC.message); }
-                        }
-                    }
-                } catch (eCook) { console.warn('[LATAM] Cookies Puppeteer erro:', eCook.message); }
-            }
-
-            // 2.6) page.evaluate: chama /bff/mytrips/v1/order/ com headers LATAM corretos
-            // X-latam-App-Session-Id = UUID gerado 1x por sessão pelo SPA
-            // X-LATAM-TAB-ID = salvo no sessionStorage pelo SPA
-            // X-latam-Application-Country/Lang/Oc = BR, pt, BR
-            if (!latamTemDados()) {
-                try {
-                    const latamBrowserResult = await page.evaluate(async (loc, sob) => {
-                        // Gera UUID v4 simples
-                        const uuidv4 = () => 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, c => {
-                            const r = Math.random() * 16 | 0;
-                            return (c === 'x' ? r : (r & 0x3 | 0x8)).toString(16);
-                        });
-
-                        // Lê TAB_ID do sessionStorage (gerado pelo SPA ao inicializar)
-                        const tabId = window.sessionStorage.getItem('X-LATAM-TAB-ID') || uuidv4();
-                        const appSessionId = uuidv4(); // UUID gerado por sessão
-
-                        // Headers completos conforme análise do _app chunk
-                        const latamHeaders = {
-                            'Accept': 'application/json, text/plain, */*',
-                            'X-LATAM-TAB-ID': tabId,
-                            'X-latam-App-Session-Id': appSessionId,
-                            'X-latam-Request-Id': uuidv4(),
+                    const latamBrowserResult = await page.evaluate(async (loc, sob, uuid1, uuid2) => {
+                        const hdrs = {
+                            'Accept': 'application/json',
+                            'X-LATAM-TAB-ID': uuid1,
+                            'X-latam-App-Session-Id': uuid2,
+                            'X-latam-Request-Id': Math.random().toString(36).substring(2),
                             'X-latam-Client-Name': 'xp-web-mytrips',
                             'X-latam-Application-Country': 'BR',
                             'X-latam-Application-Lang': 'pt',
                             'X-latam-Application-Oc': 'BR',
-                            'X-latam-Application-Name': 'xp-web-mytrips',
-                            'X-latam-Application-Platform': 'web',
                         };
-
-                        const results = [];
-                        // Endpoint descoberto no código fonte do SPA:
-                        // getOrder: baseUrl + /bff/mytrips/v1/ + "order/id/:orderId/lastname/:lastname?origin=second-detail"
-                        const endpoints = [
+                        for (const ep of [
                             `https://www.latamairlines.com/bff/mytrips/v1/order/id/${loc}/lastname/${sob}?origin=second-detail`,
                             `https://www.latamairlines.com/bff/mytrips/v1/order/id/LA${loc}/lastname/${sob}?origin=second-detail`,
-                            `https://www.latamairlines.com/bff/mytrips/v1/order/id/${loc}/lastname/${sob}`,
-                        ];
-
-                        for (const ep of endpoints) {
+                        ]) {
                             try {
-                                const resp = await fetch(ep, {
-                                    credentials: 'include',
-                                    headers: latamHeaders
-                                });
-                                const ct = resp.headers.get('content-type') || '';
-                                const txt = await resp.text();
-                                results.push({ ep: ep.substring(ep.indexOf('/bff/')), status: resp.status, ct: ct.substring(0,30), body: txt.substring(0, 400) });
-                                if (resp.ok && ct.includes('json') && txt.length > 20) {
-                                    try { return { url: ep, data: JSON.parse(txt) }; }
-                                    catch (_) {}
+                                const r = await fetch(ep, { credentials: 'include', headers: hdrs });
+                                const ct = r.headers.get('content-type') || '';
+                                const t = await r.text();
+                                console.log('[LATAM browser]', r.status, ep.substring(40,80), t.substring(0,80));
+                                if (r.ok && ct.includes('json') && t.length > 20) {
+                                    return { url: ep, data: JSON.parse(t) };
                                 }
-                            } catch (e) { results.push({ ep, error: e.message }); }
+                            } catch (_) {}
                         }
-                        return { results, tabId };
-                    }, localizador, sobrenomeL);
-
+                        return null;
+                    }, localizador, sobrenomeL, randomUUID(), randomUUID());
                     if (latamBrowserResult?.data && Object.keys(latamBrowserResult.data).length > 2) {
                         apiData.push(latamBrowserResult);
-                        console.log('[LATAM] Browser evaluate v2 OK:', latamBrowserResult.url?.substring(0, 80));
-                    } else {
-                        console.log('[LATAM] Browser evaluate v2 results:', JSON.stringify(latamBrowserResult?.results || []).substring(0, 800));
-                        console.log('[LATAM] TAB_ID do sessionStorage:', latamBrowserResult?.tabId);
+                        console.log('[LATAM] Browser context OK:', latamBrowserResult.url?.substring(0, 80));
                     }
-                } catch (eBE) { console.warn('[LATAM] Browser evaluate v2 erro:', eBE.message); }
+                } catch (eBE) { console.warn('[LATAM] Browser context erro:', eBE.message); }
             }
 
-            // 3) Captura estado JS da página (após renderização)
-            try {
-                const latamEval = await page.evaluate(() => {
-                    const nd = document.getElementById('__NEXT_DATA__');
-                    if (nd) { try { return { _s: 'nextData', ...JSON.parse(nd.textContent) }; } catch(_){} }
-                    const KEYS = ['__latamState__','__LATAM_STATE__','__APP_STATE__','__INITIAL_STATE__'];
-                    for (const k of KEYS) {
-                        if (window[k] && typeof window[k] === 'object')
-                            return { _s: k, ...window[k] };
-                    }
-                    for (const k of Object.getOwnPropertyNames(window)) {
-                        if (!/booking|flight|reserv|itiner|journey/i.test(k)) continue;
-                        try {
-                            const v = window[k];
-                            if (v && typeof v === 'object' && !Array.isArray(v) && Object.keys(v).length > 3)
-                                return { _s: k, ...v };
-                        } catch(_) {}
-                    }
-                    return null;
-                });
-                if (latamEval) {
-                    apiData.push({ url: 'dom://latam-window-state', data: latamEval });
-                    console.log('[LATAM] Window state capturado, fonte:', latamEval._s);
-                }
-            } catch (e) { console.warn('[LATAM] DOM eval erro:', e.message); }
+            console.log(`[LATAM] Dados capturados: ${apiData.length} APIs | Akamai bloqueou: ${!apiData.length}`);
 
         } else if (isGol) {
             // GOL: SPA Angular/MFE — usa ElementHandle.type() para simular digitação real
@@ -1878,7 +1464,7 @@ router.post('/capturar', async (req, res) => {
             bilheteData = extrairBilheteTap(apiData, pageText, pageHtml);
         }
 
-        res.json({ success: true, pageText, pageHtml: pageHtml.substring(0, 200000), apiData, bilheteData, _latamIntercepted: _latamReqCapture, _latamConsoleLogs: _consoleLogs });
+        res.json({ success: true, pageText, pageHtml: pageHtml.substring(0, 200000), apiData, bilheteData });
 
     } catch (error) {
         console.error('[Reservas] Erro:', error.message);
