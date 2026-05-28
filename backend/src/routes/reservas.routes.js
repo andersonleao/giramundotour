@@ -1360,58 +1360,88 @@ router.post('/capturar', async (req, res) => {
                         }).catch(() => []);
                         console.log('[LATAM] Inputs no DOM:', JSON.stringify(inputInfo));
 
-                        // Seletores específicos do xp-web-mytrips LATAM
-                        const SEL_LOC = '[name="identifier"],[name="locator"],[name="pnr"],[placeholder*="reserva" i],[placeholder*="compra" i],[placeholder*="código" i]';
-                        const SEL_SOB = '[name="lastName"],[name="surname"],[name="sobrenome"],[placeholder*="sobrenome" i],[placeholder*="surname" i]';
+                        // Abordagem React fiber: chama o onChange handler diretamente
+                        // Isso atualiza o estado React interno, o que simpleInput/nativeValueSetter não conseguem
+                        const reactFiberFill = await page.evaluate((loc, sob) => {
+                            const triggerReactChange = (el, value) => {
+                                if (!el) return false;
+                                // Encontra o React fiber/interno do elemento
+                                const rKey = Object.keys(el).find(k =>
+                                    k.startsWith('__reactFiber') || k.startsWith('__reactInternalInstance') || k.startsWith('__reactProps')
+                                );
+                                if (!rKey) return false;
 
-                        // Usa page.type() do Puppeteer — simula input nativo via CDP (não JS)
-                        // É mais autêntico que nativeInputValueSetter e dispara eventos React
-                        let locEl = await page.$(SEL_LOC).catch(() => null);
-                        let sobEl = await page.$(SEL_SOB).catch(() => null);
+                                if (rKey.startsWith('__reactProps')) {
+                                    // React 18: props diretamente no elemento
+                                    const props = el[rKey];
+                                    if (props?.onChange) {
+                                        props.onChange({ target: { value }, currentTarget: { value }, nativeEvent: { target: { value } } });
+                                        return true;
+                                    }
+                                } else {
+                                    // React 16/17: navega pelo fiber
+                                    let fiber = el[rKey];
+                                    while (fiber) {
+                                        const props = fiber.memoizedProps;
+                                        if (props?.onChange) {
+                                            // Também seta o valor DOM primeiro (para displayar)
+                                            const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')?.set;
+                                            if (setter) setter.call(el, value);
+                                            props.onChange({ target: el, currentTarget: el, nativeEvent: { target: el, value } });
+                                            return true;
+                                        }
+                                        fiber = fiber.return;
+                                    }
+                                }
+                                return false;
+                            };
 
-                        // Fallback por posição se seletores específicos não encontraram
-                        const allInputs = await page.$$('input:not([type=hidden]):not([type=checkbox]):not([type=radio])');
-                        console.log(`[LATAM] Total inputs: ${allInputs.length} | loc=${!!locEl} sob=${!!sobEl}`);
-                        if (!locEl && allInputs.length > 0) locEl = allInputs[0];
-                        if (!sobEl && allInputs.length > 1) sobEl = allInputs[1];
+                            const allInputs = [...document.querySelectorAll('input:not([type=hidden])')];
+                            const locEl = document.querySelector('[name="identifier"],[name="locator"],[name="pnr"],[placeholder*="reserva" i],[placeholder*="compra" i]') || allInputs[0];
+                            const sobEl = document.querySelector('[name="lastName"],[name="surname"],[placeholder*="sobrenome" i]') || allInputs[1];
 
-                        if (locEl) {
-                            await locEl.click({ clickCount: 3 });
-                            await new Promise(r => setTimeout(r, 150));
-                            await locEl.type(localizador, { delay: 80 });
-                            console.log('[LATAM] Localizador typed via page.type():', localizador);
-                            await new Promise(r => setTimeout(r, 400));
-                        }
-                        if (sobEl) {
-                            await sobEl.click({ clickCount: 3 });
-                            await new Promise(r => setTimeout(r, 150));
-                            await sobEl.type(sobrenomeL, { delay: 80 });
-                            console.log('[LATAM] Sobrenome typed via page.type():', sobrenomeL);
-                            await new Promise(r => setTimeout(r, 500));
-                        }
+                            const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')?.set;
+                            // Seta via DOM primeiro
+                            if (locEl && setter) setter.call(locEl, loc);
+                            if (sobEl && setter) setter.call(sobEl, sob);
 
-                        // Clica no botão de busca ou pressiona Enter
-                        const btnSel = await page.evaluate(() => {
+                            // Dispara onChange via React fiber
+                            const okLoc = triggerReactChange(locEl, loc);
+                            const okSob = triggerReactChange(sobEl, sob);
+
+                            // Dispara eventos de change/blur para garantir validação
+                            [locEl, sobEl].filter(Boolean).forEach(el => {
+                                el.dispatchEvent(new Event('input',  { bubbles: true }));
+                                el.dispatchEvent(new Event('change', { bubbles: true }));
+                                el.dispatchEvent(new Event('blur',   { bubbles: true }));
+                            });
+
+                            return {
+                                okLoc, okSob,
+                                locName: locEl?.name || locEl?.placeholder,
+                                sobName: sobEl?.name || sobEl?.placeholder,
+                                inputs: allInputs.length,
+                                locVal: locEl?.value,
+                                sobVal: sobEl?.value,
+                            };
+                        }, localizador, sobrenomeL);
+                        console.log('[LATAM] React fiber fill:', JSON.stringify(reactFiberFill));
+
+                        await new Promise(r => setTimeout(r, 800));
+
+                        // Clica no botão via coordenadas do mouse (mais real que btn.click())
+                        const btnCoords = await page.evaluate(() => {
                             const btn = [...document.querySelectorAll('button,[type="submit"]')]
                                 .find(b => /procurar|buscar|search|continuar/i.test(b.textContent || b.getAttribute('aria-label') || ''));
-                            return btn ? { found: true, text: btn.textContent?.trim() } : { found: false };
+                            if (!btn) return null;
+                            const r = btn.getBoundingClientRect();
+                            return { x: r.x + r.width/2, y: r.y + r.height/2, text: btn.textContent?.trim() };
                         });
-                        console.log('[LATAM] Botão busca:', JSON.stringify(btnSel));
+                        console.log('[LATAM] Botão coords:', JSON.stringify(btnCoords));
 
-                        if (btnSel.found) {
-                            // page.click() usa CDP (mais autêntico que btn.click() dentro de evaluate)
-                            await page.evaluate(() => {
-                                const btn = [...document.querySelectorAll('button,[type="submit"]')]
-                                    .find(b => /procurar|buscar|search|continuar/i.test(b.textContent || b.getAttribute('aria-label') || ''));
-                                if (btn) {
-                                    const rect = btn.getBoundingClientRect();
-                                    return { x: rect.x + rect.width/2, y: rect.y + rect.height/2 };
-                                }
-                            }).then(async coords => {
-                                if (coords) await page.mouse.click(coords.x, coords.y);
-                            }).catch(() => {});
+                        if (btnCoords) {
+                            await page.mouse.click(btnCoords.x, btnCoords.y);
                         }
-                        // Também pressiona Enter globalmente
                         await page.keyboard.press('Enter');
                         console.log('[LATAM] Enter pressionado');
 
