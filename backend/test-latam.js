@@ -76,17 +76,32 @@ const URL_LATAM = `https://www.latamairlines.com/br/pt/minhas-viagens?identifier
         console.log('  ℹ️  Sem trecho de volta (só ida)');
     }
 
+    // Chamadas LATAM interceptadas pelo Puppeteer (page.on request)
+    const reqCapture = data._latamIntercepted || [];
+    console.log('\n──── Requests Puppeteer LATAM (page.on request) ────────');
+    if (reqCapture.length === 0) {
+        console.log('  (nenhum request LATAM capturado)');
+    } else {
+        reqCapture.forEach((c, i) => {
+            console.log(`  [${i}] ${c.method} ${c.url?.substring(0, 100)}`);
+            const hdrs = c.headers || {};
+            const relevantes = Object.entries(hdrs).filter(([k]) => !/cookie|user-agent|accept-language|accept-encoding/i.test(k));
+            if (relevantes.length) console.log(`       ${JSON.stringify(Object.fromEntries(relevantes)).substring(0, 300)}`);
+            if (c.body) console.log(`       Body: ${c.body?.substring(0, 150)}`);
+        });
+    }
+
     // Chamadas LATAM interceptadas pelo fetch interceptor do SPA
     const intercepted = data._latamConsoleLogs || [];
-    console.log('\n──── Chamadas LATAM interceptadas pelo SPA ─────────────');
+    console.log('\n──── Fetch interceptor (injected BEFORE site JS) ───────');
     if (intercepted.length === 0) {
-        console.log('  (nenhuma — SPA não fez chamadas ou interceptor falhou)');
+        console.log('  (nenhuma — SPA não fez fetch ou interceptor falhou)');
     } else {
         intercepted.forEach((c, i) => {
             console.log(`  [${i}] ${c.method} ${c.url?.substring(0, 100)}`);
             const hdrs = c.headers || {};
             const relevantes = Object.entries(hdrs).filter(([k]) => !/cookie|user-agent|accept-language/i.test(k));
-            console.log(`       Headers relevantes: ${JSON.stringify(Object.fromEntries(relevantes)).substring(0, 250)}`);
+            console.log(`       Headers: ${JSON.stringify(Object.fromEntries(relevantes)).substring(0, 300)}`);
             if (c.body) console.log(`       Body: ${c.body?.substring(0, 150)}`);
         });
     }
