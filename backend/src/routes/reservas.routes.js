@@ -1330,6 +1330,7 @@ router.post('/capturar', async (req, res) => {
                     return u.includes('latamairlines.com') &&
                            !u.includes('go-mpulse') && !u.includes('config.json') &&
                            !u.includes('/MX8t95') && !u.includes('akamai') &&
+                           !u.includes('/locales/') && !u.includes('/_next/static/') &&
                            ct.includes('application/json');
                 };
 
