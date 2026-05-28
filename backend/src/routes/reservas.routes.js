@@ -820,7 +820,7 @@ function extrairBilheteGol(apiData, pageText, pageHtml) {
 // ─────────────────────────────────────────────
 
 router.post('/capturar', async (req, res) => {
-    const { url } = req.body;
+    let { url } = req.body;
     if (!url) return res.status(400).json({ success: false, message: 'URL é obrigatória' });
 
     console.log(`[Reservas] Capturando: ${url}`);
@@ -915,12 +915,13 @@ router.post('/capturar', async (req, res) => {
                     }
                 }
             }
-        } else if (isAzul) {
-            // Azul usa Akamai Bot Manager — tenta puppeteer-real-browser (corrige TLS fingerprint)
-            let azulPage = null;
+        } else if (isAzul || isLatam) {
+            // Azul e LATAM usam Akamai Bot Manager — puppeteer-real-browser corrige TLS fingerprint
+            const _lbl = isLatam ? 'LATAM' : 'Azul';
+            let akamaiPage = null;
             try {
-                const { connect: realConnectAzul } = require('puppeteer-real-browser');
-                const chromeExeAzul = [
+                const { connect: realConnectAk } = require('puppeteer-real-browser');
+                const chromeExeAk = [
                     process.env.CHROME_PATH,
                     process.env.PUPPETEER_EXECUTABLE_PATH,
                     '/usr/bin/chromium-browser',
@@ -929,8 +930,8 @@ router.post('/capturar', async (req, res) => {
                     'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe',
                 ].filter(Boolean).find(p => { try { return fs.existsSync(p); } catch { return false; } });
 
-                console.log('[Azul] puppeteer-real-browser: iniciando bypass Akamai...');
-                const realResultAzul = await realConnectAzul({
+                console.log(`[${_lbl}] puppeteer-real-browser: iniciando bypass Akamai...`);
+                const realResultAk = await realConnectAk({
                     headless: false,
                     args: [
                         '--no-sandbox', '--disable-setuid-sandbox',
@@ -938,27 +939,27 @@ router.post('/capturar', async (req, res) => {
                         '--window-size=1280,800',
                         '--window-position=9999,9999',
                     ],
-                    customConfig: chromeExeAzul ? { chromePath: chromeExeAzul } : {},
+                    customConfig: chromeExeAk ? { chromePath: chromeExeAk } : {},
                     turnstile: false,
                     connectOption: { defaultViewport: { width: 1366, height: 768 } },
                     disableXvfb: true,
                 });
-                browser  = realResultAzul.browser;
-                azulPage = realResultAzul.page;
-                console.log('[Azul] puppeteer-real-browser: OK');
-            } catch (eAzulReal) {
-                console.warn('[Azul] puppeteer-real-browser falhou:', eAzulReal.message, '— usando fallback stealth');
-                browser  = await puppeteerExtra.launch(launchOptions);
-                azulPage = null;
+                browser    = realResultAk.browser;
+                akamaiPage = realResultAk.page;
+                console.log(`[${_lbl}] puppeteer-real-browser: OK`);
+            } catch (eAkReal) {
+                console.warn(`[${_lbl}] puppeteer-real-browser falhou:`, eAkReal.message, '— usando fallback stealth');
+                browser    = await puppeteerExtra.launch(launchOptions);
+                akamaiPage = null;
             }
             // Cria nova página se real-browser não retornou uma
-            const _azulNewPage = azulPage || await browser.newPage();
-            if (!azulPage) {
-                await _azulNewPage.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36');
+            const _akNewPage = akamaiPage || await browser.newPage();
+            if (!akamaiPage) {
+                await _akNewPage.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36');
             }
-            await _azulNewPage.setViewport({ width: 1366, height: 768 });
-            // Continua usando _azulNewPage como page — reatribui via const abaixo
-            golPage = _azulNewPage; // reutiliza a variável golPage para simplificar o fluxo
+            await _akNewPage.setViewport({ width: 1366, height: 768 });
+            // Continua usando _akNewPage como page — reatribui via const abaixo
+            golPage = _akNewPage; // reutiliza a variável golPage para simplificar o fluxo
         } else {
             browser = await puppeteer.launch(launchOptions);
         }
