@@ -1247,33 +1247,53 @@ router.post('/capturar', async (req, res) => {
                         const inputs = await page.$$('input:not([type=hidden]):not([type=checkbox]):not([type=radio])');
                         console.log(`[LATAM] Inputs: ${inputs.length} | específicos: loc=${!!locInput} sob=${!!sobInput}`);
 
-                        const typeInto = async (el, val) => {
-                            if (!el || !val) return;
-                            await el.click({ clickCount: 3 });
-                            await new Promise(r => setTimeout(r, 100));
-                            await el.type(val, { delay: 70 });
-                            await new Promise(r => setTimeout(r, 200));
-                        };
+                        // Usa nativeInputValueSetter para forçar React controlled inputs a aceitar o valor
+                        const formFilled = await page.evaluate((loc, sob) => {
+                            const setReactValue = (el, value) => {
+                                if (!el) return false;
+                                const proto = Object.getPrototypeOf(el);
+                                const nativeSetter = Object.getOwnPropertyDescriptor(proto, 'value')?.set ||
+                                                     Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')?.set;
+                                if (nativeSetter) nativeSetter.call(el, value);
+                                else el.value = value;
+                                el.dispatchEvent(new Event('input',  { bubbles: true }));
+                                el.dispatchEvent(new Event('change', { bubbles: true }));
+                                return true;
+                            };
 
-                        const elLoc = locInput || inputs[0] || null;
-                        const elSob = sobInput || inputs[1] || null;
+                            const locEl = document.querySelector(
+                                '[name="identifier"],[name="locator"],[name="pnr"],' +
+                                '[placeholder*="localizador" i],[placeholder*="código" i],[placeholder*="reserva" i]'
+                            ) || document.querySelectorAll('input:not([type=hidden])')[0];
+                            const sobEl = document.querySelector(
+                                '[name="lastName"],[name="surname"],[name="sobrenome"],' +
+                                '[placeholder*="sobrenome" i],[placeholder*="surname" i]'
+                            ) || document.querySelectorAll('input:not([type=hidden])')[1];
 
-                        if (elLoc) await typeInto(elLoc, localizador);
-                        if (elSob) {
-                            await typeInto(elSob, sobrenomeL);
-                            // Pressiona Enter para submeter (mais confiável que clicar)
-                            await page.keyboard.press('Enter');
-                            console.log('[LATAM] Form: Enter pressionado após sobrenome');
-                        } else if (elLoc) {
-                            // Tenta clicar no botão de busca
-                            const clicou = await page.evaluate(() => {
-                                const btn = [...document.querySelectorAll('button,[type="submit"]')]
-                                    .find(b => /buscar|consultar|procurar|continuar|search/i.test(b.textContent));
-                                if (btn) { btn.click(); return btn.textContent.trim(); }
-                                return false;
-                            });
-                            console.log('[LATAM] Botão clicado:', clicou);
-                        }
+                            const ok0 = setReactValue(locEl, loc);
+                            const ok1 = setReactValue(sobEl, sob);
+
+                            if (sobEl) {
+                                sobEl.focus();
+                                sobEl.dispatchEvent(new KeyboardEvent('keydown',  { key: 'Enter', keyCode: 13, bubbles: true }));
+                                sobEl.dispatchEvent(new KeyboardEvent('keypress', { key: 'Enter', keyCode: 13, bubbles: true }));
+                                sobEl.dispatchEvent(new KeyboardEvent('keyup',    { key: 'Enter', keyCode: 13, bubbles: true }));
+                            }
+
+                            const btn = [...document.querySelectorAll('button,[type="submit"]')]
+                                .find(b => /buscar|consultar|procurar|continuar|search/i.test(b.textContent || b.getAttribute('aria-label') || ''));
+                            if (btn) btn.click();
+
+                            return {
+                                locName: locEl?.name || locEl?.placeholder || '?',
+                                sobName: sobEl?.name || sobEl?.placeholder || '?',
+                                totalInputs: document.querySelectorAll('input').length,
+                                ok0, ok1,
+                                btnText: btn?.textContent?.trim() || '(nenhum)'
+                            };
+                        }, localizador, sobrenomeL);
+
+                        console.log('[LATAM] Form React preenchido:', JSON.stringify(formFilled));
 
                         // Aguarda resposta da API após submit
                         try {
@@ -1328,6 +1348,49 @@ router.post('/capturar', async (req, res) => {
                         }
                     }
                 } catch (eCook) { console.warn('[LATAM] Cookies Puppeteer erro:', eCook.message); }
+            }
+
+            // 2.6) page.evaluate: chama a API de booking de dentro do browser (com cookies reais)
+            // O browser tem os cookies da sessão incluindo os Akamai — pode ter mais sucesso que Node fetch
+            if (!latamTemDados()) {
+                try {
+                    const latamBrowserResult = await page.evaluate(async (loc, sob) => {
+                        const endpoints = [
+                            `https://www.latamairlines.com/bff/retrieve-booking?locator=${loc}&lastName=${sob}`,
+                            `https://www.latamairlines.com/bff/retrieve-booking?identifier=${loc}&lastName=${sob}`,
+                            `https://www.latamairlines.com/pt-br/xp-web-mytrips/api/retrieve?identifier=${loc}&lastName=${sob}`,
+                        ];
+                        for (const ep of endpoints) {
+                            try {
+                                const resp = await fetch(ep, {
+                                    credentials: 'include',
+                                    headers: {
+                                        'Accept': 'application/json, text/plain, */*',
+                                        'X-Requested-With': 'XMLHttpRequest',
+                                        'Referer': location.href,
+                                    }
+                                });
+                                if (resp.ok) {
+                                    const ct = resp.headers.get('content-type') || '';
+                                    if (ct.includes('json')) {
+                                        const text = await resp.text();
+                                        if (text && text.length > 10) {
+                                            try { return { url: ep, data: JSON.parse(text) }; }
+                                            catch { return { url: ep, data: { rawText: text.substring(0, 500) } }; }
+                                        }
+                                    }
+                                }
+                            } catch (_) {}
+                        }
+                        return null;
+                    }, localizador, sobrenomeL);
+                    if (latamBrowserResult?.data && Object.keys(latamBrowserResult.data).length > 2) {
+                        apiData.push(latamBrowserResult);
+                        console.log('[LATAM] Browser evaluate OK:', latamBrowserResult.url?.substring(0, 80));
+                    } else {
+                        console.log('[LATAM] Browser evaluate: sem dados (CORS ou bloqueado)');
+                    }
+                } catch (eBE) { console.warn('[LATAM] Browser evaluate erro:', eBE.message); }
             }
 
             // 3) Captura estado JS da página (após renderização)
