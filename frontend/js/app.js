@@ -16,6 +16,7 @@ const App = {
         SuppliersModule.init();
         TicketsModule.init();
         ReservasModule.init();
+        ImportacaoModule.init();
         HoteisModule.init();
         MonitoramentoModule.init();
         UsuariosModule.init();
@@ -144,6 +145,10 @@ const App = {
 
             case 'reservas':
                 ReservasModule.render();
+                break;
+
+            case 'importacao':
+                ImportacaoModule.render();
                 break;
 
             case 'hoteis':
