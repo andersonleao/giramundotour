@@ -341,16 +341,33 @@ class FlightSearchService {
 
         // Para rotas internacionais, inclui LATAM (opera rotas BR-Europa/EUA) + cias internacionais
         const companhiasInternacionais = [
-            { codigo: 'LA', nome: 'LATAM Airlines', cor: '#1B0088' },
-            { codigo: 'IB', nome: 'Iberia', cor: '#DA291C' },
-            { codigo: 'TP', nome: 'TAP Air Portugal', cor: '#00A651' },
-            { codigo: 'AF', nome: 'Air France', cor: '#002157' },
-            { codigo: 'AA', nome: 'American Airlines', cor: '#0078D2' },
+            { codigo: 'LA', nome: 'LATAM Airlines',      cor: '#1B0088' },
+            { codigo: 'IB', nome: 'Iberia',              cor: '#DA291C' },
+            { codigo: 'TP', nome: 'TAP Air Portugal',    cor: '#00A651' },
+            { codigo: 'AF', nome: 'Air France',          cor: '#002157' },
+            { codigo: 'AA', nome: 'American Airlines',   cor: '#0078D2' },
+            { codigo: 'DL', nome: 'Delta Air Lines',     cor: '#003366' },
+            { codigo: 'UA', nome: 'United Airlines',     cor: '#005DAA' },
+            { codigo: 'KL', nome: 'KLM',                 cor: '#00A1E4' },
+            { codigo: 'LH', nome: 'Lufthansa',           cor: '#05164D' },
+            { codigo: 'BA', nome: 'British Airways',     cor: '#075AAA' },
         ];
+
+        // Parceiros codeshare da LATAM (oneworld + parceiros bilaterais para rotas EUA/Europa)
+        const codesharesLatam = {
+            US: ['DL', 'AA', 'UA'],
+            EU: ['IB', 'BA', 'AF', 'KL', 'LH'],
+        };
 
         const companhias = isInternacional ? companhiasInternacionais : companhiasDomesticas;
 
-        const horariosIda = ['06:00', '07:15', '08:30', '09:45', '10:15', '11:30', '12:45', '14:00', '15:30', '16:45', '18:00', '19:15', '20:30', '21:45', '22:00'];
+        // Detecta região do destino para escolher parceiros de codeshare LATAM coerentes.
+        const aeroportosUS = new Set(['JFK','LGA','EWR','LAX','BUR','LGB','ORD','MDW','ATL','DFW','DAL','SFO','OAK','SJC','MCO','BOS','IAD','DCA','BWI','LAS','MIA','SEA','DEN','PHX','SAN','HNL','IAH']);
+        const aeroportosEU = new Set(['LHR','LGW','STN','LCY','CDG','ORY','FRA','AMS','MAD','BCN','FCO','CIA','MXP','LIN','BGY','LIS','OPO','ZRH','SXB','MUC','DUB','BRU','VIE','CPH','ARN','HEL']);
+        const destRegion = aeroportosUS.has(params.destino) ? 'US'
+                         : aeroportosEU.has(params.destino) ? 'EU' : null;
+
+        const horariosIda = ['06:00', '07:15', '08:30', '09:45', '10:15', '11:30', '12:45', '13:35', '14:00', '15:30', '16:45', '18:00', '19:15', '20:30', '21:45', '22:00'];
         const voos = [];
         const distanciaBase = this.calcularDistanciaAproximada(params.origem, params.destino);
 
@@ -422,9 +439,19 @@ class FlightSearchService {
                     }
                 }
 
+                // Codeshare LATAM operado por parceiro (Delta/AA/United nos EUA; Iberia/BA/AF/KL/LH na Europa)
+                let operadoPor = null;
+                if (cia.codigo === 'LA' && destRegion && codesharesLatam[destRegion] && Math.random() < 0.4) {
+                    const parceiros = codesharesLatam[destRegion];
+                    const pcode = parceiros[Math.floor(Math.random() * parceiros.length)];
+                    const parceiro = companhiasInternacionais.find(c => c.codigo === pcode);
+                    if (parceiro) operadoPor = { codigo: parceiro.codigo, nome: parceiro.nome };
+                }
+
                 voos.push({
                     id: `${cia.codigo}-${Date.now()}-${i}`,
                     companhia: { codigo: cia.codigo, nome: cia.nome, cor: cia.cor },
+                    operadoPor,
                     numero: `${cia.codigo}${Math.floor(Math.random() * 9000) + 1000}`,
                     origem: {
                         codigo: params.origem,
@@ -470,6 +497,79 @@ class FlightSearchService {
             }
         });
 
+        // Injeta voos LATAM-codeshare garantidos em horários estratégicos para
+        // rotas internacionais BR→US/EU com 2 paradas. Cobre cenários reais:
+        // LATAM voo LA com hub em GRU + parceiro operando trecho transcontinental.
+        if (isInternacional && destRegion && Math.abs(distanciaBase) > 4000) {
+            const ciaLA = companhias.find(c => c.codigo === 'LA');
+            const parceiros = codesharesLatam[destRegion] || [];
+            const horariosCodeshare = ['13:35', '09:20', '21:10'];
+
+            horariosCodeshare.forEach((hPart, idx) => {
+                const parceiroCode = parceiros[idx % parceiros.length];
+                const parceiro = companhiasInternacionais.find(c => c.codigo === parceiroCode);
+                if (!ciaLA || !parceiro) return;
+
+                const [hh, mm] = hPart.split(':').map(Number);
+                // Rotas longas BR-US/EU com 2 paradas: ~18-24h totais
+                const duracaoMin = 1080 + Math.floor(Math.random() * 360);
+                const totalMin = hh * 60 + mm + duracaoMin + 90; // +90 conexões
+                const cHoras = Math.floor(totalMin / 60) % 24;
+                const cMins = totalMin % 60;
+                const diasAMais = Math.floor(totalMin / (24 * 60));
+                const dataChegada = this.adicionarDias(params.dataIda, diasAMais);
+                const horarioChegada = `${String(cHoras).padStart(2,'0')}:${String(cMins).padStart(2,'0')}`;
+                const partTs = this.criarTimestamp(params.dataIda, hPart);
+                const chegaTs = this.criarTimestamp(dataChegada, horarioChegada);
+
+                const hub1 = 'GRU';
+                const hub2 = destRegion === 'US' ? 'MIA' : 'MAD';
+                if (hub1 === params.origem || hub2 === params.destino) return;
+
+                const addMin = (iso, m) => {
+                    const base = iso.includes('Z') ? new Date(iso) : new Date(iso + '+00:00');
+                    base.setTime(base.getTime() + m * 60000);
+                    const pad = n => String(n).padStart(2,'0');
+                    return `${base.getUTCFullYear()}-${pad(base.getUTCMonth()+1)}-${pad(base.getUTCDate())}T${pad(base.getUTCHours())}:${pad(base.getUTCMinutes())}:00`;
+                };
+
+                const segDur = Math.floor((duracaoMin - 90) / 3);
+                const seg1End = addMin(partTs, segDur);
+                const seg2Start = addMin(seg1End, 45);
+                const seg2End = addMin(seg2Start, segDur);
+                const seg3Start = addMin(seg2End, 45);
+
+                const preco = Math.round((1800 + Math.random() * 1500) * 100) / 100;
+                const pontosInfo = this.calcularPontos(preco, 'LA');
+
+                voos.push({
+                    id: `LA-codeshare-${parceiro.codigo}-${hPart.replace(':','')}-${Date.now()}`,
+                    companhia: { codigo: 'LA', nome: 'LATAM Airlines', cor: '#1B0088' },
+                    operadoPor: { codigo: parceiro.codigo, nome: parceiro.nome },
+                    numero: `LA${Math.floor(Math.random() * 9000) + 1000}`,
+                    origem:  { codigo: params.origem,  ...this.aeroportosBR[params.origem]  || { cidade: params.origem,  nome: '', uf: '' } },
+                    destino: { codigo: params.destino, ...this.aeroportosBR[params.destino] || { cidade: params.destino, nome: '', uf: '' } },
+                    partida: { data: params.dataIda,  horario: hPart, timestamp: partTs },
+                    chegada: { data: dataChegada,     horario: horarioChegada, timestamp: chegaTs },
+                    duracao: { total: duracaoMin, texto: `${Math.floor(duracaoMin/60)}h ${duracaoMin % 60}min` },
+                    escalas: 2,
+                    classe: params.classe || 'economica',
+                    preco: { valor: preco, moeda: 'BRL', porPessoa: preco, taxas: 52.05, total: preco + 52.05 },
+                    pontos: pontosInfo ? {
+                        quantidade: pontosInfo.pontos, programa: pontosInfo.programa,
+                        taxaEmbarque: pontosInfo.taxaEmbarque, valorEquivalente: pontosInfo.pontos * pontosInfo.valorPonto
+                    } : null,
+                    assentos: Math.floor(Math.random() * 9) + 1,
+                    tipo: params.tipo || 'ida',
+                    segmentos: [
+                        { companhia: 'LA',                numeroVoo: `LA${Math.floor(Math.random()*9000)+1000}`, origem: params.origem, destino: hub1,           partida: partTs,    chegada: seg1End,  duracao: segDur },
+                        { companhia: parceiro.codigo,     numeroVoo: `${parceiro.codigo}${Math.floor(Math.random()*9000)+100}`, origem: hub1,         destino: hub2,           partida: seg2Start, chegada: seg2End,  duracao: segDur },
+                        { companhia: parceiro.codigo,     numeroVoo: `${parceiro.codigo}${Math.floor(Math.random()*9000)+100}`, origem: hub2,         destino: params.destino, partida: seg3Start, chegada: chegaTs,  duracao: segDur },
+                    ]
+                });
+            });
+        }
+
         voos.sort((a, b) => a.preco.valor - b.preco.valor);
         return voos;
     }
@@ -511,10 +611,19 @@ class FlightSearchService {
             'PNZ': { lat: -9.36, lon: -40.56 },
             'CGB': { lat: -15.65, lon: -56.12 }, 'GYN': { lat: -16.63, lon: -49.22 },
             'MIA': { lat: 25.79, lon: -80.29 },  'JFK': { lat: 40.64, lon: -73.78 },
-            'LAX': { lat: 33.94, lon: -118.41 }, 'CDG': { lat: 49.01, lon: 2.55 },
-            'LHR': { lat: 51.47, lon: -0.46 },   'FCO': { lat: 41.80, lon: 12.25 },
-            'MAD': { lat: 40.47, lon: -3.56 },   'LIS': { lat: 38.77, lon: -9.13 },
-            'OPO': { lat: 41.24, lon: -8.68 },
+            'LGA': { lat: 40.78, lon: -73.87 },  'EWR': { lat: 40.69, lon: -74.17 },
+            'LAX': { lat: 33.94, lon: -118.41 }, 'LAS': { lat: 36.08, lon: -115.15 },
+            'ORD': { lat: 41.98, lon: -87.91 },  'DFW': { lat: 32.90, lon: -97.04 },
+            'ATL': { lat: 33.64, lon: -84.43 },  'SFO': { lat: 37.62, lon: -122.38 },
+            'BOS': { lat: 42.36, lon: -71.01 },  'MCO': { lat: 28.43, lon: -81.31 },
+            'IAD': { lat: 38.95, lon: -77.46 },  'SEA': { lat: 47.45, lon: -122.31 },
+            'DEN': { lat: 39.86, lon: -104.67 }, 'PHX': { lat: 33.43, lon: -112.01 },
+            'CDG': { lat: 49.01, lon: 2.55 },    'LHR': { lat: 51.47, lon: -0.46 },
+            'FCO': { lat: 41.80, lon: 12.25 },   'MAD': { lat: 40.47, lon: -3.56 },
+            'LIS': { lat: 38.77, lon: -9.13 },   'OPO': { lat: 41.24, lon: -8.68 },
+            'AMS': { lat: 52.31, lon: 4.76 },    'FRA': { lat: 50.04, lon: 8.56 },
+            'BCN': { lat: 41.30, lon: 2.08 },    'MXP': { lat: 45.63, lon: 8.72 },
+            'ZRH': { lat: 47.46, lon: 8.55 },
             'EZE': { lat: -34.82, lon: -58.54 }, 'SCL': { lat: -33.39, lon: -70.79 }
         };
 

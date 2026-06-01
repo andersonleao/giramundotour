@@ -449,25 +449,34 @@ const SearchModule = {
      * Renderiza conteudo interno do card de voo
      */
     _renderFlightCardInner(voo, tipo, selecionado) {
-        const origem = voo.origin || voo.origem;
-        const destino = voo.destination || voo.destino;
-        const origemAirport = getAirportByCode(origem);
-        const destinoAirport = getAirportByCode(destino);
+        // Normaliza schema: aceita formato atual (objeto aninhado) e legado (strings flat)
+        const origemCode  = voo.origem?.codigo  || voo.origem  || voo.origin || '';
+        const destinoCode = voo.destino?.codigo || voo.destino || voo.destination || '';
+        const origemAirport  = getAirportByCode(origemCode);
+        const destinoAirport = getAirportByCode(destinoCode);
 
-        const companhia = voo.airline || voo.companhia;
-        const companhiaNome = voo.airlineName || voo.companhiaNome || getAirlineName(companhia);
-        const companhiaCor = voo.airlineColor || voo.companhiaCor || getAirlineColor(companhia);
-        const numeroVoo = voo.flightNumber || voo.numeroVoo;
-        const preco = voo.price || voo.preco;
-        const duracao = voo.duration || voo.duracao;
-        const escalas = voo.stops ?? voo.escalas ?? 0;
-        const departureTime = voo.departureTime || Formatter.time(voo.dataPartida) || '';
-        const arrivalTime = voo.arrivalTime || Formatter.time(voo.dataChegada) || '';
-        const departureDate = Formatter.date(voo.dataPartida || voo.departureDate || '');
-        const origemCidade = voo.originCity || origemAirport?.city || '';
-        const destinoCidade = voo.destinationCity || destinoAirport?.city || '';
-        const duracaoTexto = voo.durationText || Formatter.duration(duracao);
-        const assentos = voo.seats || voo.assentosDisponiveis || voo.assentos || 9;
+        const companhiaCodigo = (voo.companhia?.codigo || voo.airline || voo.companhia || '').toString();
+        const companhiaNome   = voo.companhia?.nome || voo.airlineName || voo.companhiaNome || getAirlineName(companhiaCodigo);
+        const companhiaCor    = voo.companhia?.cor  || voo.airlineColor || voo.companhiaCor  || getAirlineColor(companhiaCodigo);
+        const operadoPor      = voo.operadoPor || voo.operatedBy || null;
+        const numeroVoo       = voo.numero || voo.flightNumber || voo.numeroVoo || '';
+
+        const precoValor   = voo.preco?.valor    ?? voo.price ?? 0;
+        const duracaoMin   = voo.duracao?.total  ?? voo.duration ?? 0;
+        const duracaoTexto = voo.duracao?.texto  || voo.durationText || Formatter.duration(duracaoMin);
+        const escalas      = voo.escalas ?? voo.stops ?? 0;
+
+        const departureTime = voo.partida?.horario || voo.departureTime || Formatter.time(voo.dataPartida) || '';
+        const arrivalTime   = voo.chegada?.horario || voo.arrivalTime   || Formatter.time(voo.dataChegada) || '';
+        const departureDate = Formatter.date(voo.partida?.data || voo.dataPartida || voo.departureDate || '');
+
+        const origemCidade  = voo.origem?.cidade  || voo.originCity      || origemAirport?.city  || '';
+        const destinoCidade = voo.destino?.cidade || voo.destinationCity || destinoAirport?.city || '';
+        const assentos = voo.assentos || voo.seats || voo.assentosDisponiveis || 9;
+
+        // expõe para o resto do template
+        const origem = origemCode, destino = destinoCode, preco = precoValor, duracao = duracaoMin;
+        const companhia = companhiaCodigo;
 
         let pontosHtml = '';
         if (voo.pontos) {
@@ -493,6 +502,7 @@ const SearchModule = {
                     </div>
                     <div class="airline-name mt-2">${companhiaNome}</div>
                     <small class="text-muted">${numeroVoo}</small>
+                    ${operadoPor ? `<small class="d-block text-muted" style="font-size:0.7rem;"><i class="bi bi-info-circle"></i> operado por ${operadoPor.nome || operadoPor.codigo}</small>` : ''}
                 </div>
 
                 <div class="col-md-5">
