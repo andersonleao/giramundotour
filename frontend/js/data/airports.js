@@ -60,6 +60,7 @@ const AIRPORTS = [
     { code: 'IAD', name: 'Washington Dulles International Airport', city: 'Washington', country: 'Estados Unidos', countryCode: 'US', metro: 'Washington' },
     { code: 'DCA', name: 'Ronald Reagan Washington National Airport', city: 'Washington', country: 'Estados Unidos', countryCode: 'US', metro: 'Washington' },
     { code: 'BWI', name: 'Baltimore/Washington International Airport', city: 'Baltimore', country: 'Estados Unidos', countryCode: 'US', metro: 'Washington' },
+    { code: 'LAS', name: 'Harry Reid International Airport', city: 'Las Vegas', country: 'Estados Unidos', countryCode: 'US' },
 
     // Europa
     { code: 'LHR', name: 'London Heathrow Airport', city: 'Londres', country: 'Reino Unido', countryCode: 'GB', metro: 'Londres' },
