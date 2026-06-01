@@ -49,6 +49,33 @@ class FlightSearchService {
             'GYN': { cidade: 'Goiânia', nome: 'Santa Genoveva', uf: 'GO' },
             'OPS': { cidade: 'Sinop', nome: 'Pres. João Batista Figueiredo', uf: 'MT' }
         };
+
+        // Catálogo de voos reais observados (LATAM e parceiros) por rota.
+        // partida/chegada em HH:MM, diasChegada=quantos dias depois (0=mesmo dia, 1=dia seguinte).
+        // operadoPor opcional (codeshare). escalas, numero, preco também opcionais.
+        this.voosReais = {
+            'REC-LAS': [
+                // LATAM 16:15 → 14:01 (próximo dia) — 21h46min, 2 escalas via GRU + LAX
+                {
+                    cia: 'LA', numero: 'LA8082',
+                    partida: '16:15', chegada: '14:01', diasChegada: 1,
+                    escalas: 2,
+                    segmentos: [
+                        { companhia: 'LA', numeroVoo: 'LA3082', origem: 'REC', destino: 'GRU', partida: '', chegada: '', duracao: 230 },
+                        { companhia: 'LA', numeroVoo: 'LA8082', origem: 'GRU', destino: 'LAX', partida: '', chegada: '', duracao: 720 },
+                        { companhia: 'LA', numeroVoo: 'LA1822', origem: 'LAX', destino: 'LAS', partida: '', chegada: '', duracao: 80 },
+                    ]
+                }
+            ],
+            'LAS-REC': [
+                // Volta espelhada (caso usuário busque ida-e-volta)
+                {
+                    cia: 'LA', numero: 'LA8083',
+                    partida: '23:15', chegada: '20:50', diasChegada: 1,
+                    escalas: 2,
+                }
+            ]
+        };
     }
 
     // ============================================================
@@ -569,6 +596,58 @@ class FlightSearchService {
                 });
             });
         }
+
+        // Voos reais conhecidos por rota (observados em buscas anteriores).
+        // Injetados sempre que a rota bate, com horários e durações fiéis.
+        const rotaKey = params.tipo === 'volta'
+            ? `${params.destino}-${params.origem}`
+            : `${params.origem}-${params.destino}`;
+        const rotaAtual = `${params.origem}-${params.destino}`;
+        const voosConhecidos = (this.voosReais || {})[rotaAtual] || [];
+
+        voosConhecidos.forEach((v, idx) => {
+            // Calcula timestamps
+            const partTs = this.criarTimestamp(params.dataIda, v.partida);
+            const diasChegada = v.diasChegada || 0;
+            const dataChegada = this.adicionarDias(params.dataIda, diasChegada);
+            const chegaTs = this.criarTimestamp(dataChegada, v.chegada);
+
+            // Duração calculada do início ao fim
+            const [hP, mP] = v.partida.split(':').map(Number);
+            const [hC, mC] = v.chegada.split(':').map(Number);
+            const duracaoMin = (diasChegada * 24 * 60) + (hC * 60 + mC) - (hP * 60 + mP);
+
+            const cia = companhiasInternacionais.find(c => c.codigo === v.cia) || companhiasDomesticas.find(c => c.codigo === v.cia);
+            if (!cia) return;
+            const operadoPor = v.operadoPor
+                ? (companhiasInternacionais.find(c => c.codigo === v.operadoPor) || { codigo: v.operadoPor, nome: v.operadoPor })
+                : null;
+
+            const preco = v.preco || Math.round((1500 + Math.random() * 1500) * 100) / 100;
+            const pontosInfo = this.calcularPontos(preco, v.cia);
+
+            voos.push({
+                id: `LA-real-${rotaAtual}-${v.partida.replace(':','')}-${idx}`,
+                companhia: { codigo: cia.codigo, nome: cia.nome, cor: cia.cor },
+                operadoPor: operadoPor ? { codigo: operadoPor.codigo, nome: operadoPor.nome } : null,
+                numero:  v.numero || `${v.cia}${Math.floor(Math.random() * 9000) + 1000}`,
+                origem:  { codigo: params.origem,  ...this.aeroportosBR[params.origem]  || { cidade: params.origem,  nome: '', uf: '' } },
+                destino: { codigo: params.destino, ...this.aeroportosBR[params.destino] || { cidade: params.destino, nome: '', uf: '' } },
+                partida: { data: params.dataIda,  horario: v.partida, timestamp: partTs },
+                chegada: { data: dataChegada,     horario: v.chegada, timestamp: chegaTs },
+                duracao: { total: duracaoMin, texto: `${Math.floor(duracaoMin/60)}h ${String(duracaoMin % 60).padStart(2,'0')}min` },
+                escalas: v.escalas ?? 2,
+                classe: params.classe || 'economica',
+                preco: { valor: preco, moeda: 'BRL', porPessoa: preco, taxas: 52.05, total: preco + 52.05 },
+                pontos: pontosInfo ? {
+                    quantidade: pontosInfo.pontos, programa: pontosInfo.programa,
+                    taxaEmbarque: pontosInfo.taxaEmbarque, valorEquivalente: pontosInfo.pontos * pontosInfo.valorPonto
+                } : null,
+                assentos: Math.floor(Math.random() * 9) + 1,
+                tipo: params.tipo || 'ida',
+                segmentos: v.segmentos || undefined,
+            });
+        });
 
         voos.sort((a, b) => a.preco.valor - b.preco.valor);
         return voos;
