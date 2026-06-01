@@ -698,11 +698,10 @@ const SearchModule = {
 
         const companhias = new Map();
         [...(resultados.ida || []), ...(resultados.volta || [])].forEach(voo => {
-            const code = voo.airline || voo.companhia;
+            // companhia pode vir como objeto {codigo, nome} (API atual) ou string (legado)
+            const code = (voo.companhia?.codigo || voo.airline || voo.companhia || '').toString().toUpperCase();
             if (!code || companhias.has(code)) return;
-            const nome = voo.airlineName || getAirlineName(code);
-            // Ignora códigos desconhecidos (getAirlineName retorna o próprio código quando não encontra)
-            if (nome === code) return;
+            const nome = voo.companhia?.nome || voo.airlineName || getAirlineName(code) || code;
             companhias.set(code, nome);
         });
 
@@ -726,26 +725,26 @@ const SearchModule = {
         let voosVoltaFiltrados = [...(this.resultados.volta || [])];
 
         if (filtroCompanhia) {
-            voosIdaFiltrados = voosIdaFiltrados.filter(v => (v.airline || v.companhia) === filtroCompanhia);
-            voosVoltaFiltrados = voosVoltaFiltrados.filter(v => (v.airline || v.companhia) === filtroCompanhia);
+            const ciaCode = (v) => (v.companhia?.codigo || v.airline || v.companhia || '').toString().toUpperCase();
+            voosIdaFiltrados   = voosIdaFiltrados.filter(v => ciaCode(v) === filtroCompanhia.toUpperCase());
+            voosVoltaFiltrados = voosVoltaFiltrados.filter(v => ciaCode(v) === filtroCompanhia.toUpperCase());
         }
 
         if (filtroEscalas !== '' && filtroEscalas !== undefined) {
             const maxEscalas = parseInt(filtroEscalas);
-            voosIdaFiltrados = voosIdaFiltrados.filter(v => (v.stops ?? v.escalas ?? 0) <= maxEscalas);
-            voosVoltaFiltrados = voosVoltaFiltrados.filter(v => (v.stops ?? v.escalas ?? 0) <= maxEscalas);
+            voosIdaFiltrados   = voosIdaFiltrados.filter(v => (v.escalas ?? v.stops ?? 0) <= maxEscalas);
+            voosVoltaFiltrados = voosVoltaFiltrados.filter(v => (v.escalas ?? v.stops ?? 0) <= maxEscalas);
         }
 
         const ordenar = (voos) => {
+            const preco   = v => v.preco?.valor    ?? v.price         ?? 0;
+            const duracao = v => v.duracao?.total  ?? v.duration      ?? 0;
+            const partida = v => v.partida?.horario ?? v.departureTime ?? '';
             switch (ordenacao) {
-                case 'preco':
-                    return voos.sort((a, b) => (a.price || 0) - (b.price || 0));
-                case 'duracao':
-                    return voos.sort((a, b) => (a.duration || 0) - (b.duration || 0));
-                case 'partida':
-                    return voos.sort((a, b) => (a.departureTime || '').localeCompare(b.departureTime || ''));
-                default:
-                    return voos;
+                case 'preco':    return voos.sort((a, b) => preco(a)   - preco(b));
+                case 'duracao':  return voos.sort((a, b) => duracao(a) - duracao(b));
+                case 'partida':  return voos.sort((a, b) => partida(a).localeCompare(partida(b)));
+                default:         return voos;
             }
         };
 
