@@ -2429,7 +2429,12 @@ const TicketsModule = {
                         <div class="modal-body">
                             <div class="alert alert-info py-2 mb-3">
                                 <i class="bi bi-info-circle me-1"></i>
-                                <strong>${nomeCliente}</strong> — ${qtdPax} passageiro${qtdPax > 1 ? 's' : ''}
+                                ${qtdPax} passageiro${qtdPax > 1 ? 's' : ''} no bilhete
+                            </div>
+                            <div class="mb-3">
+                                <label class="form-label fw-semibold">Nome do Cliente</label>
+                                <input type="text" class="form-control" id="reciboNomeCliente"
+                                       value="${nomeCliente}" placeholder="Nome de quem efetuou o pagamento">
                             </div>
                             <div class="mb-3">
                                 <label class="form-label fw-semibold">Valor Total (R$)</label>
@@ -2481,12 +2486,14 @@ const TicketsModule = {
         const observacao = document.getElementById('reciboObservacao').value.trim();
         const forma = observacao ? `${formaPagamento} — ${observacao}` : formaPagamento;
         const valorTotal = parseFloat(document.getElementById('reciboValorTotal')?.value) || 0;
+        const nomeCliente = document.getElementById('reciboNomeCliente')?.value?.trim() || '';
 
         bootstrap.Modal.getInstance(document.getElementById('modalRecibo'))?.hide();
 
         const bilhete = this._bilhetes.find(b => b.id === id);
         if (!bilhete) return;
-        ReportModule.gerarReciboPDF({ ...bilhete }, forma, valorTotal);
+        // Nome informado no modal sobrepõe o cliente do bilhete no recibo
+        ReportModule.gerarReciboPDF({ ...bilhete, clienteNome: nomeCliente || bilhete.clienteNome }, forma, valorTotal);
     },
 
     /**
