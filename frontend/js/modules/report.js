@@ -1505,7 +1505,11 @@ const ReportModule = {
         doc.setTextColor(...textDark);
         doc.setFontSize(9.5); doc.setFont('helvetica', 'normal');
         const col2X = margin + contentWidth / 2;
-        doc.text(`Companhia: ${bilhete.companhiaNome || bilhete.companhia || '-'}`, margin + 5, y);
+        // Resolve o nome da companhia a partir do código IATA (ex: "AD" → "Azul Linhas Aéreas")
+        const companhiaLabel = bilhete.companhiaNome
+            || ((typeof getAirlineByCode === 'function' && bilhete.companhia) ? getAirlineByCode(bilhete.companhia)?.name : null)
+            || bilhete.companhia || '-';
+        doc.text(`Companhia: ${companhiaLabel}`, margin + 5, y);
         doc.text(`Localizador: ${bilhete.codigoReserva || '-'}`, col2X, y);
         y += 7;
         doc.text(`Origem: ${origemLabel}`, margin + 5, y);
