@@ -1030,7 +1030,9 @@ const HoteisModule = {
             const _sc  = { confirmada: [40,167,69], pendente: [255,193,7], cancelada: [220,53,69] };
             const _cor = _sc[hotel.status] || [100,100,100];
             const _sl  = { confirmada: 'CONFIRMADA', pendente: 'PENDENTE', cancelada: 'CANCELADA' };
-            if (y + 20 > pageHeight - 25) {
+            // Badge tem 12 de altura; rodapé começa em pageHeight-18. Só quebra a página
+            // se o badge realmente não couber acima do rodapé (evita jogá-lo p/ a 2ª página à toa).
+            if (y + 14 > pageHeight - 18) {
                 doc.addPage();
                 doc.setFillColor(...corAzul);
                 doc.rect(0, 0, pageWidth, 10, 'F');
