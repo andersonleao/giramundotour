@@ -1007,7 +1007,7 @@ const TicketsModule = {
             dados.companhia = 'LA';
         } else if (/VoeGOL|GOL\s*Linhas|OPERADO\s*POR.*GOL|Cartão\s*de\s*Embarque/i.test(flat) || /\bG3\s?\d{3,4}\b/.test(flat)) {
             dados.companhia = 'G3';
-        } else if (/\bAzul\b/i.test(flat) || /\bAD\s?\d{3,4}\b/.test(flat)) {
+        } else if (/\bAzul\b/i.test(flat) || /\bAD\s?\d{3,4}\b/.test(flat) || /\bAZU\s?\d{3,4}\b/i.test(flat) || (/Localizador/i.test(flat) && /Visualizar\s+reserva/i.test(flat))) {
             dados.companhia = 'AD';
         } else {
             for (const airline of (typeof AIRLINES !== 'undefined' ? AIRLINES : [])) {
@@ -1179,6 +1179,27 @@ const TicketsModule = {
         // Old: "Passageiros: 3\nJOSEFA MARIA...\nSEBASTIANA..." (ALL CAPS, separate lines)
         // New: "2 PASSAGEIROS\nJoseja Felipe Da Silva Maria Patricia Silva Dantas" (Title Case, may be on SAME line)
         if (dados.companhia === 'AD') {
+            // New Azul "Localizador" layout (LNVMJQ-style): "Passageiros: N" followed by
+            // ALL-CAPS names, each interleaved with "Ida/Volta Assentos Bagagens ... kg" blocks.
+            // Collect ALL-CAPS name lines (2+ words), skipping section/airport tokens.
+            const localizadorPax = flat.match(/Passageiros?\s*:\s*(\d+)/i);
+            if (localizadorPax && /\bAZU\s?\d{3,4}|Assentos/i.test(flat)) {
+                const numPaxLoc = parseInt(localizadorPax[1]);
+                const startIdx = linhas.findIndex(l => /Passageiros?\s*:/i.test(l));
+                if (startIdx >= 0) {
+                    const skipPax = /^(IDA|VOLTA|ASSENTOS|BAGAGENS|INFORMA|ECON|RECIFE|TANCREDO|AEROPORTO|INTERNACIONAL|NEVES|GUARARAPES)\b/i;
+                    const seenPax = new Set();
+                    for (let i = startIdx + 1; i < linhas.length && dados.passageiros.length < numPaxLoc; i++) {
+                        const l = linhas[i].trim();
+                        // Nome: ALL CAPS, 2+ palavras (permite conectores DE/DA/DO de 2 letras)
+                        if (/^[A-ZÀ-Ú]{2,}(?:\s+[A-ZÀ-Ú]{2,})+$/.test(l) && !skipPax.test(l)) {
+                            const nome = this._formatarNome(l);
+                            if (!seenPax.has(nome)) { seenPax.add(nome); dados.passageiros.push(nome); }
+                        }
+                    }
+                }
+            }
+
             const novoFormatoMatch = flat.match(/(\d+)\s+PASSAGEIROS/i);
             const antigoFormatoMatch = flat.match(/Passageiros?\s*:\s*(\d+)/i);
             const numPassageiros = novoFormatoMatch ? parseInt(novoFormatoMatch[1])
@@ -1731,6 +1752,29 @@ const TicketsModule = {
         // =============================================
         // Azul new format: parse "VOOS DE IDA" and "VOOS DE VOLTA" sections
         if (dados.companhia === 'AD') {
+            // New Azul "Localizador" layout (LNVMJQ-style). Each flight reads:
+            // "09:10 21/07/2026 ...(REC) RECCNF Voo AZU2802 Econômica ...(CNF) 11:40 21/07/2026"
+            // The route codes ("RECCNF" or "REC ⇢ CNF") sit immediately before "Voo AZU####".
+            const azSep = '[\\s\\u2190-\\u21FF\\u2700-\\u27BF>»✈|–—\\-]*';
+            const azSegRe = new RegExp(
+                '(\\d{1,2}:\\d{2})\\s+(\\d{2})\\/(\\d{2})\\/(\\d{4})[\\s\\S]*?' +
+                '([A-Z]{3})' + azSep + '([A-Z]{3})\\s+Voo\\s+(?:AZU|AD)\\s?(\\d{3,4})[\\s\\S]*?' +
+                '(\\d{1,2}:\\d{2})\\s+(\\d{2})\\/(\\d{2})\\/(\\d{4})',
+                'gi'
+            );
+            let azm;
+            while ((azm = azSegRe.exec(flat)) !== null) {
+                dados.trechos.push({
+                    tipo: dados.trechos.length === 0 ? 'ida' : 'volta',
+                    voo: 'AD ' + azm[7],
+                    origem: azm[5],
+                    destino: azm[6],
+                    data: `${azm[4]}-${azm[3]}-${azm[2]}`,
+                    horaPartida: azm[1],
+                    horaChegada: azm[8]
+                });
+            }
+
             const secoes = [
                 { regex: /VOOS\s+DE\s+IDA/i, tipo: 'ida' },
                 { regex: /VOOS\s+DE\s+VOLTA/i, tipo: 'volta' }
