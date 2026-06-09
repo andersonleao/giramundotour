@@ -2411,10 +2411,12 @@ const TicketsModule = {
         // Remove modal anterior se existir
         document.getElementById('modalRecibo')?.remove();
 
-        const nomeCliente = bilhete.clienteNome || 'Cliente';
-        const valor = bilhete.valorVenda ? Formatter.currency(bilhete.valorVenda) : 'R$ 0,00';
         const nomePax = bilhete.passageiroNome || 'N/A';
-        const qtdPax  = nomePax.includes(',') ? nomePax.split(',').filter(n => n.trim()).length : 1;
+        const listaPax = nomePax.includes(',') ? nomePax.split(',').map(n => n.trim()).filter(Boolean) : (nomePax !== 'N/A' ? [nomePax] : []);
+        const qtdPax  = listaPax.length || 1;
+        // Sem cliente vinculado (ex: bilhete importado) → usa o 1º passageiro
+        const nomeCliente = bilhete.clienteNome || listaPax[0] || 'Cliente';
+        const valorNum = bilhete.valorVenda || 0;
 
         const modalHtml = `
             <div class="modal fade" id="modalRecibo" tabindex="-1">
@@ -2428,7 +2430,12 @@ const TicketsModule = {
                             <div class="alert alert-info py-2 mb-3">
                                 <i class="bi bi-info-circle me-1"></i>
                                 <strong>${nomeCliente}</strong> — ${qtdPax} passageiro${qtdPax > 1 ? 's' : ''}
-                                &nbsp;|&nbsp; Total: <strong>${valor}</strong>
+                            </div>
+                            <div class="mb-3">
+                                <label class="form-label fw-semibold">Valor Total (R$)</label>
+                                <input type="number" step="0.01" min="0" class="form-control" id="reciboValorTotal"
+                                       value="${valorNum || ''}" placeholder="0,00">
+                                <small class="text-muted">Dividido igualmente entre os ${qtdPax} passageiro${qtdPax > 1 ? 's' : ''} no recibo.</small>
                             </div>
                             <div class="mb-3">
                                 <label class="form-label fw-semibold">Forma de Pagamento</label>
@@ -2473,12 +2480,13 @@ const TicketsModule = {
         }
         const observacao = document.getElementById('reciboObservacao').value.trim();
         const forma = observacao ? `${formaPagamento} — ${observacao}` : formaPagamento;
+        const valorTotal = parseFloat(document.getElementById('reciboValorTotal')?.value) || 0;
 
         bootstrap.Modal.getInstance(document.getElementById('modalRecibo'))?.hide();
 
         const bilhete = this._bilhetes.find(b => b.id === id);
         if (!bilhete) return;
-        ReportModule.gerarReciboPDF({ ...bilhete }, forma);
+        ReportModule.gerarReciboPDF({ ...bilhete }, forma, valorTotal);
     },
 
     /**

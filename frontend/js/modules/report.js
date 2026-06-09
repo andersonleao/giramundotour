@@ -1330,8 +1330,9 @@ const ReportModule = {
      * Gera PDF de recibo de pagamento para um bilhete.
      * @param {object} bilhete - Dados do bilhete
      * @param {string} formaPagamento - Forma de pagamento informada
+     * @param {number|string} [valorTotalParam] - Valor total do recibo (sobrepõe valorVenda)
      */
-    async gerarReciboPDF(bilhete, formaPagamento) {
+    async gerarReciboPDF(bilhete, formaPagamento, valorTotalParam) {
         if (typeof jspdf === 'undefined' || typeof jspdf.jsPDF === 'undefined') {
             alert('Biblioteca jsPDF não carregada. Verifique a conexão com a internet.');
             return;
@@ -1353,6 +1354,12 @@ const ReportModule = {
         const textDark     = [33, 37, 41];
         const textMuted    = [120, 130, 140];
         const rowH         = 8;
+
+        // Espaço reservado para o rodapé — conteúdo não pode invadir essa faixa
+        const footerReserve = 28;
+        const ensureSpace = (needed) => {
+            if (y + needed > pageHeight - footerReserve) { doc.addPage(); y = margin; }
+        };
 
         // ── CABEÇALHO ────────────────────────────────────────────────
         doc.setFillColor(...primaryColor);
@@ -1422,28 +1429,7 @@ const ReportModule = {
 
         y += 14;
 
-        // ── DADOS DO CLIENTE ─────────────────────────────────────────
-        doc.setFillColor(240, 245, 255);
-        doc.setDrawColor(...primaryLight);
-        doc.setLineWidth(0.3);
-        doc.roundedRect(margin, y - 5, contentWidth, 28, 3, 3, 'FD');
-
-        doc.setTextColor(...primaryColor);
-        doc.setFontSize(10); doc.setFont('helvetica', 'bold');
-        doc.text('DADOS DO CLIENTE', margin + 5, y + 2);
-
-        y += 9;
-        doc.setTextColor(...textDark);
-        doc.setFontSize(10); doc.setFont('helvetica', 'normal');
-        const nomeCliente = bilhete.clienteNome || bilhete.cliente?.nome || 'N/A';
-        doc.text(`Nome: ${nomeCliente}`, margin + 5, y);
-        if (bilhete.clienteTelefone) {
-            doc.text(`Telefone: ${Formatter.phone(bilhete.clienteTelefone)}`, pageWidth / 2, y);
-        }
-
-        y += 22;
-
-        // ── PASSAGEIROS ──────────────────────────────────────────────
+        // ── PASSAGEIROS (parse antes — 1º nome vira cliente quando não houver vínculo)
         const nomesPassageiros = [];
         const nomeBruto = bilhete.passageiroNome || '';
         (nomeBruto.includes(',')
@@ -1452,7 +1438,32 @@ const ReportModule = {
         ).forEach(n => nomesPassageiros.push(n));
         if (nomesPassageiros.length === 0) nomesPassageiros.push('N/A');
 
+        // ── DADOS DO CLIENTE ─────────────────────────────────────────
+        // Sem cliente vinculado (ex: bilhete importado) → usa o 1º passageiro do bilhete
+        const nomeCliente = bilhete.clienteNome || bilhete.cliente?.nome || nomesPassageiros[0] || 'N/A';
+
+        doc.setFillColor(240, 245, 255);
+        doc.setDrawColor(...primaryLight);
+        doc.setLineWidth(0.3);
+        doc.roundedRect(margin, y - 5, contentWidth, 20, 3, 3, 'FD');
+
+        doc.setTextColor(...primaryColor);
+        doc.setFontSize(10); doc.setFont('helvetica', 'bold');
+        doc.text('DADOS DO CLIENTE', margin + 5, y + 2);
+
+        y += 9;
+        doc.setTextColor(...textDark);
+        doc.setFontSize(10); doc.setFont('helvetica', 'normal');
+        doc.text(`Nome: ${nomeCliente}`, margin + 5, y);
+        if (bilhete.clienteTelefone) {
+            doc.text(`Telefone: ${Formatter.phone(bilhete.clienteTelefone)}`, pageWidth / 2, y);
+        }
+
+        y += 16;
+
+        // ── PASSAGEIROS ──────────────────────────────────────────────
         const passBoxH = 14 + nomesPassageiros.length * 7;
+        ensureSpace(passBoxH + 12);
         doc.setFillColor(248, 250, 252);
         doc.setDrawColor(...borderColor);
         doc.setLineWidth(0.3);
@@ -1473,7 +1484,7 @@ const ReportModule = {
         y += 10;
 
         // ── DADOS DO VOO ─────────────────────────────────────────────
-        if (y > pageHeight - 80) { doc.addPage(); y = margin; }
+        ensureSpace(56);
 
         const origemAirport  = (typeof getAirportByCode === 'function' && bilhete.origem)  ? getAirportByCode(bilhete.origem)  : null;
         const destinoAirport = (typeof getAirportByCode === 'function' && bilhete.destino) ? getAirportByCode(bilhete.destino) : null;
@@ -1508,7 +1519,7 @@ const ReportModule = {
         y += 18;
 
         // ── TABELA DE PAGAMENTO ──────────────────────────────────────
-        if (y > pageHeight - 80) { doc.addPage(); y = margin; }
+        ensureSpace(40);
 
         doc.setTextColor(...primaryColor);
         doc.setFontSize(11); doc.setFont('helvetica', 'bold');
@@ -1516,25 +1527,36 @@ const ReportModule = {
         y += 8;
 
         const totalPax    = nomesPassageiros.length || 1;
-        const valorTotal  = bilhete.valorVenda || 0;
+        // Valor total: parâmetro informado no modal tem prioridade; senão usa valorVenda
+        const valorTotal  = (valorTotalParam != null && valorTotalParam !== '' && !isNaN(Number(valorTotalParam)))
+            ? Number(valorTotalParam)
+            : (bilhete.valorVenda || 0);
         const valorPorPax = valorTotal / totalPax;
 
         const colW = [contentWidth - 45, 45];
 
-        // Cabeçalho da tabela
+        // Cabeçalho da tabela (redesenhado a cada nova página)
         let tx = margin;
-        ['Passageiro', 'Valor Pago'].forEach((h, i) => {
-            doc.setFillColor(...primaryColor);
-            doc.rect(tx, y, colW[i], rowH, 'F');
-            doc.setTextColor(255, 255, 255);
-            doc.setFont('helvetica', 'bold'); doc.setFontSize(8.5);
-            doc.text(h, tx + 3, y + rowH / 2 + 1.5);
-            tx += colW[i];
-        });
-        y += rowH;
+        const drawTableHeader = () => {
+            let hx = margin;
+            ['Passageiro', 'Valor Pago'].forEach((h, i) => {
+                doc.setFillColor(...primaryColor);
+                doc.rect(hx, y, colW[i], rowH, 'F');
+                doc.setTextColor(255, 255, 255);
+                doc.setFont('helvetica', 'bold'); doc.setFontSize(8.5);
+                doc.text(h, hx + 3, y + rowH / 2 + 1.5);
+                hx += colW[i];
+            });
+            y += rowH;
+        };
+        drawTableHeader();
 
-        // Linhas dos passageiros
+        // Linhas dos passageiros (quebra de página redesenha o cabeçalho da tabela)
         nomesPassageiros.forEach((nome, i) => {
+            if (y + rowH > pageHeight - footerReserve) {
+                doc.addPage(); y = margin;
+                drawTableHeader();
+            }
             tx = margin;
             const bg = i % 2 === 0 ? 255 : 249;
             colW.forEach(w => {
@@ -1550,6 +1572,7 @@ const ReportModule = {
         });
 
         // Linha de total
+        ensureSpace(rowH + 4);
         tx = margin;
         colW.forEach(w => {
             doc.setFillColor(230, 240, 255);
@@ -1564,6 +1587,7 @@ const ReportModule = {
 
         // Forma de pagamento
         if (formaPagamento) {
+            ensureSpace(16);
             doc.setFontSize(10); doc.setFont('helvetica', 'normal'); doc.setTextColor(...textDark);
             const labelW = doc.getTextWidth('Forma de Pagamento:  ');
             doc.text('Forma de Pagamento:  ', margin, y);
@@ -1575,14 +1599,13 @@ const ReportModule = {
         y += 4;
 
         // ── DECLARAÇÃO ───────────────────────────────────────────────
-        if (y > pageHeight - 55) { doc.addPage(); y = margin; }
-
         const declaracao = `Declaro ter recebido de ${nomeCliente} a importância de ${Formatter.currency(valorTotal)}` +
             ` referente à aquisição de passagens aéreas para ${nomesPassageiros.length === 1 ? 'o passageiro' : 'os passageiros'} acima discriminado${nomesPassageiros.length === 1 ? '' : 's'},` +
             ` conforme reserva ${bilhete.codigoReserva || ''}.`;
         const declLines = doc.splitTextToSize(declaracao, contentWidth - 10);
         const declH     = declLines.length * 5 + 10;
 
+        ensureSpace(declH + 14);
         doc.setFillColor(252, 252, 252);
         doc.setDrawColor(...borderColor);
         doc.setLineWidth(0.3);
@@ -1592,7 +1615,7 @@ const ReportModule = {
         y += declH + 12;
 
         // ── ASSINATURAS ──────────────────────────────────────────────
-        if (y > pageHeight - 40) { doc.addPage(); y = margin; }
+        ensureSpace(24);
 
         const sigW = (contentWidth - 20) / 2;
         doc.setDrawColor(120, 120, 120); doc.setLineWidth(0.4);
