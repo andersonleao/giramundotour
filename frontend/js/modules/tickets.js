@@ -912,22 +912,41 @@ const TicketsModule = {
 
             console.log('[GiraMundo] Página', i, '- items:', content.items.length);
 
-            // Agrupa por posição Y (mantém estrutura de linhas)
+            // Agrupa por posição Y (mantém estrutura de linhas).
+            // Mantém x/width/height para reconstruir palavras: alguns PDFs (ex: Azul
+            // "Localizador") emitem cada glifo como um item separado, e juntar tudo com
+            // espaço fixo quebra as palavras ("L o ca liz ad or"). Em vez disso, só
+            // inserimos espaço quando o gap horizontal entre itens for relevante.
             const linhas = {};
             content.items.forEach(item => {
                 if (!item.str || item.str.trim() === '') return;
                 const y = item.transform ? item.transform[5] : 0;
                 const x = item.transform ? item.transform[4] : 0;
+                const w = item.width || 0;
+                const h = item.height || (item.transform ? Math.abs(item.transform[3]) : 10);
                 const yKey = Math.round(y / 3) * 3;
                 if (!linhas[yKey]) linhas[yKey] = [];
-                linhas[yKey].push({ x: x, text: item.str });
+                linhas[yKey].push({ x, w, h, text: item.str });
             });
 
             const yKeys = Object.keys(linhas).map(Number).sort((a, b) => b - a);
 
             for (const yKey of yKeys) {
                 const items = linhas[yKey].sort((a, b) => a.x - b.x);
-                const linhaTexto = items.map(it => it.text).join(' ').trim();
+                let linhaTexto = '';
+                let prevEnd = null;
+                for (const it of items) {
+                    if (prevEnd !== null) {
+                        const gap = it.x - prevEnd;
+                        // Limiar proporcional à fonte: fragmentos do mesmo "token" ficam
+                        // colados (gap ~0); separações reais de palavra têm gap maior.
+                        const limiar = Math.max(1.0, 0.18 * (it.h || 10));
+                        if (gap > limiar) linhaTexto += ' ';
+                    }
+                    linhaTexto += it.text;
+                    prevEnd = it.x + it.w;
+                }
+                linhaTexto = linhaTexto.trim();
                 if (linhaTexto) {
                     textoCompleto += linhaTexto + '\n';
                 }
@@ -1022,6 +1041,9 @@ const TicketsModule = {
         // 2. CÓDIGO DA RESERVA
         // =============================================
         const codigoPatterns = [
+            // Azul "Localizador" layout: "Localizador Visualizar reserva LNVMJQ" — código é
+            // o token MAIÚSCULO logo após "Visualizar reserva" (case-sensitive evita capturar "Visualiz")
+            /Localizador\s+(?:Visualizar\s+reserva\s+)?([A-Z0-9]{5,7})\b/,
             /C[oó]d(?:igo)?\.?\s*(?:da|de)?\s*reserva\s+([A-Z0-9]{4,8})/i,
             /Localizador\s+([A-Z0-9]{5,8})/i,
             // Azul: "Localizador Azul * WCET" — asterisco entre nome da cia e código (OCR artifact)
@@ -1752,27 +1774,40 @@ const TicketsModule = {
         // =============================================
         // Azul new format: parse "VOOS DE IDA" and "VOOS DE VOLTA" sections
         if (dados.companhia === 'AD') {
-            // New Azul "Localizador" layout (LNVMJQ-style). Each flight reads:
-            // "09:10 21/07/2026 ...(REC) RECCNF Voo AZU2802 Econômica ...(CNF) 11:40 21/07/2026"
-            // The route codes ("RECCNF" or "REC ⇢ CNF") sit immediately before "Voo AZU####".
-            const azSep = '[\\s\\u2190-\\u21FF\\u2700-\\u27BF>»✈|–—\\-]*';
-            const azSegRe = new RegExp(
-                '(\\d{1,2}:\\d{2})\\s+(\\d{2})\\/(\\d{2})\\/(\\d{4})[\\s\\S]*?' +
-                '([A-Z]{3})' + azSep + '([A-Z]{3})\\s+Voo\\s+(?:AZU|AD)\\s?(\\d{3,4})[\\s\\S]*?' +
-                '(\\d{1,2}:\\d{2})\\s+(\\d{2})\\/(\\d{2})\\/(\\d{4})',
-                'gi'
-            );
-            let azm;
-            while ((azm = azSegRe.exec(flat)) !== null) {
-                dados.trechos.push({
-                    tipo: dados.trechos.length === 0 ? 'ida' : 'volta',
-                    voo: 'AD ' + azm[7],
-                    origem: azm[5],
-                    destino: azm[6],
-                    data: `${azm[4]}-${azm[3]}-${azm[2]}`,
-                    horaPartida: azm[1],
-                    horaChegada: azm[8]
-                });
+            // New Azul "Localizador" layout (LNVMJQ-style). The PDF groups content by
+            // IDA / VOLTA headers; pdf.js interleaves the tokens within each flight block,
+            // so we slice the lines by section and pull route/voo/datas/horários per block.
+            const idxIda = linhas.findIndex(l => /^IDA\b/i.test(l));
+            const idxVolta = linhas.findIndex(l => /^VOLTA\b/i.test(l));
+            const idxPax = linhas.findIndex(l => /Passageiros?\s*:/i.test(l));
+            const parseSecao = (ini, fim, tipo) => {
+                if (ini < 0) return;
+                const bloco = linhas.slice(ini, fim > ini ? fim : linhas.length);
+                const texto = bloco.join('\n');
+                const vooM = texto.match(/Voo\s+(?:AZU|AD)\s?(\d{3,4})/i);
+                // Rota: linha isolada "REC CNF" (dois códigos IATA)
+                let origem = '', destino = '';
+                for (const l of bloco) {
+                    const r = l.trim().match(/^([A-Z]{3})\s+([A-Z]{3})$/);
+                    if (r) { origem = r[1]; destino = r[2]; break; }
+                }
+                const datas = [...texto.matchAll(/(\d{2})\/(\d{2})\/(\d{4})/g)];
+                const horas = [...texto.matchAll(/\b(\d{1,2}:\d{2})\b/g)].map(m => m[1]);
+                if (origem || vooM || datas.length) {
+                    dados.trechos.push({
+                        tipo,
+                        voo: vooM ? 'AD ' + vooM[1] : '',
+                        origem,
+                        destino,
+                        data: datas.length ? `${datas[0][3]}-${datas[0][2]}-${datas[0][1]}` : '',
+                        horaPartida: horas[0] || '',
+                        horaChegada: horas[1] || ''
+                    });
+                }
+            };
+            if (idxIda >= 0) {
+                parseSecao(idxIda, idxVolta, 'ida');
+                parseSecao(idxVolta, idxPax, 'volta');
             }
 
             const secoes = [
