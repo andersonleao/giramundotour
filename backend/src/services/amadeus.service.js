@@ -77,13 +77,18 @@ class AmadeusService {
     //  FLIGHT OFFERS SEARCH
     // -------------------------------------------------------
 
-    async request(path, token) {
+    async request(path, token, tentativa = 1) {
         return new Promise((resolve) => {
             const options = {
                 hostname: this.host,
                 path,
                 method: 'GET',
-                headers: { Authorization: `Bearer ${token}` }
+                headers: {
+                    Authorization: `Bearer ${token}`,
+                    Accept: 'application/json',
+                    'Accept-Encoding': 'identity',
+                    Connection: 'close'
+                }
             };
             const req = https.request(options, (res) => {
                 let data = '';
@@ -103,8 +108,19 @@ class AmadeusService {
                     }
                 });
             });
-            req.setTimeout(10000, () => { req.destroy(); resolve(null); });
-            req.on('error', (e) => { console.error('❌ Amadeus request error:', e.message); resolve(null); });
+            req.setTimeout(10000, () => { req.destroy(new Error('timeout')); });
+            req.on('error', async (e) => {
+                // O ambiente test reseta conexão (ECONNRESET / socket hang up) sob carga.
+                // Uma tentativa de retry com pequeno backoff costuma resolver.
+                if (tentativa < 2) {
+                    console.log(`⏳ Amadeus retry (${e.message})...`);
+                    await new Promise(r => setTimeout(r, 600));
+                    resolve(await this.request(path, token, tentativa + 1));
+                } else {
+                    console.error('❌ Amadeus request error:', e.message);
+                    resolve(null);
+                }
+            });
             req.end();
         });
     }

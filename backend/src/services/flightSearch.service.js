@@ -7,6 +7,7 @@
 
 const https = require('https');
 const serpApiService = require('./serpapi.service');
+const amadeusService = require('./amadeus.service');
 const travelpayoutsService = require('./travelpayouts.service');
 const airlabsService = require('./airlabs.service');
 const aviationstackService = require('./aviationstack.service');
@@ -811,7 +812,7 @@ class FlightSearchService {
         // Preferência: Skyscanner (preço real) > Travelpayouts > Airlabs > AviationStack.
         const mergeVoos = (listas) => {
             const seen = new Map(); // chave → voo preferido
-            const fonteOrder = ['google_flights', 'skyscanner', 'travelpayouts', 'airlabs', 'aviationstack'];
+            const fonteOrder = ['google_flights', 'skyscanner', 'amadeus', 'travelpayouts', 'airlabs', 'aviationstack'];
             const prioFonte = (f) => { const i = fonteOrder.indexOf(f); return i === -1 ? 99 : i; };
             for (const lista of listas) {
                 if (!Array.isArray(lista)) continue;
@@ -830,13 +831,15 @@ class FlightSearchService {
         try {
             // Executa todas as fontes em paralelo para maximizar cobertura de rotas.
             // SerpAPI (Google Flights) é a FONTE PRIMÁRIA — preços e horários reais.
-            console.log('✈️ Buscando em paralelo: Google Flights (SerpAPI) + Skyscanner + Travelpayouts + Airlabs + AviationStack...');
+            // Amadeus é a fonte secundária gratuita (cobre quando a cota do SerpAPI esgota).
+            console.log('✈️ Buscando em paralelo: Google Flights (SerpAPI) + Amadeus + Skyscanner + Travelpayouts + Airlabs + AviationStack...');
             const voltaParams = params.dataVolta
                 ? { ...params, origem: params.destino, destino: params.origem, dataIda: params.dataVolta }
                 : null;
 
-            const [spRes, tpRes, alRes, asRes, fsIdaRes, fsVoltaRes] = await Promise.allSettled([
+            const [spRes, amRes, tpRes, alRes, asRes, fsIdaRes, fsVoltaRes] = await Promise.allSettled([
                 serpApiService.isConfigured()       ? serpApiService.buscarVoos(params)       : Promise.resolve(null),
+                amadeusService.isConfigured()       ? amadeusService.buscarVoos(params)       : Promise.resolve(null),
                 travelpayoutsService.isConfigured() ? travelpayoutsService.buscarVoos(params) : Promise.resolve(null),
                 airlabsService.isConfigured()       ? airlabsService.buscarVoos(params)       : Promise.resolve(null),
                 aviationstackService.isConfigured() ? aviationstackService.buscarVoos(params) : Promise.resolve(null),
@@ -845,6 +848,7 @@ class FlightSearchService {
             ]);
 
             const spResult = spRes.status === 'fulfilled' ? spRes.value : null;
+            const amResult = amRes.status === 'fulfilled' ? amRes.value : null;
             const tpResult = tpRes.status === 'fulfilled' ? tpRes.value : null;
             const alResult = alRes.status === 'fulfilled' ? alRes.value : null;
             const asResult = asRes.status === 'fulfilled' ? asRes.value : null;
@@ -852,6 +856,7 @@ class FlightSearchService {
             const fsVoltaResp = fsVoltaRes.status === 'fulfilled' ? fsVoltaRes.value : null;
 
             if (spRes.status === 'rejected') console.log('⚠️ Google Flights (SerpAPI) falhou:', spRes.reason?.message);
+            if (amRes.status === 'rejected') console.log('⚠️ Amadeus falhou:', amRes.reason?.message);
             if (tpRes.status === 'rejected') console.log('⚠️ Travelpayouts falhou:', tpRes.reason?.message);
             if (alRes.status === 'rejected') console.log('⚠️ Airlabs falhou:', alRes.reason?.message);
             if (asRes.status === 'rejected') console.log('⚠️ AviationStack falhou:', asRes.reason?.message);
@@ -866,6 +871,7 @@ class FlightSearchService {
 
             if (spResult?.ida?.length > 0)   console.log(`✅ Google Flights (SerpAPI): ${spResult.ida.length} voos de ida`);
             if (spResult?.volta?.length > 0)  console.log(`✅ Google Flights (SerpAPI): ${spResult.volta.length} voos de volta`);
+            if (amResult?.ida?.length > 0)   console.log(`✅ Amadeus: ${amResult.ida.length} voos de ida`);
 
             const fontes = [];
             const idaListas  = [];
@@ -873,6 +879,7 @@ class FlightSearchService {
 
             if (spResult?.ida?.length > 0) { idaListas.push(filtrarDomestico(spResult.ida)); voltaListas.push(filtrarDomestico(spResult.volta || [])); fontes.push('google_flights'); }
             if (fsIdaConv.ida.length > 0)  { idaListas.push(filtrarDomestico(fsIdaConv.ida));   fontes.push('skyscanner'); }
+            if (amResult?.ida?.length > 0) { idaListas.push(filtrarDomestico(amResult.ida));  voltaListas.push(filtrarDomestico(amResult.volta || [])); fontes.push('amadeus'); }
             if (fsVoltaConv.ida.length > 0) { voltaListas.push(filtrarDomestico(fsVoltaConv.ida)); }
             if (tpResult?.ida?.length > 0) { idaListas.push(filtrarDomestico(tpResult.ida));  voltaListas.push(filtrarDomestico(tpResult.volta || [])); fontes.push('travelpayouts'); }
             if (alResult?.ida?.length > 0) { idaListas.push(filtrarDomestico(alResult.ida));  voltaListas.push(filtrarDomestico(alResult.volta || [])); fontes.push('airlabs'); }
