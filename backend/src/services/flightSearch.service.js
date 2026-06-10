@@ -6,6 +6,7 @@
  */
 
 const https = require('https');
+const serpApiService = require('./serpapi.service');
 const travelpayoutsService = require('./travelpayouts.service');
 const airlabsService = require('./airlabs.service');
 const aviationstackService = require('./aviationstack.service');
@@ -810,7 +811,7 @@ class FlightSearchService {
         // Preferência: Skyscanner (preço real) > Travelpayouts > Airlabs > AviationStack.
         const mergeVoos = (listas) => {
             const seen = new Map(); // chave → voo preferido
-            const fonteOrder = ['skyscanner', 'travelpayouts', 'airlabs', 'aviationstack'];
+            const fonteOrder = ['google_flights', 'skyscanner', 'travelpayouts', 'airlabs', 'aviationstack'];
             const prioFonte = (f) => { const i = fonteOrder.indexOf(f); return i === -1 ? 99 : i; };
             for (const lista of listas) {
                 if (!Array.isArray(lista)) continue;
@@ -827,13 +828,15 @@ class FlightSearchService {
         };
 
         try {
-            // Executa todas as fontes em paralelo para maximizar cobertura de rotas
-            console.log('✈️ Buscando em paralelo: Skyscanner + Travelpayouts + Airlabs + AviationStack...');
+            // Executa todas as fontes em paralelo para maximizar cobertura de rotas.
+            // SerpAPI (Google Flights) é a FONTE PRIMÁRIA — preços e horários reais.
+            console.log('✈️ Buscando em paralelo: Google Flights (SerpAPI) + Skyscanner + Travelpayouts + Airlabs + AviationStack...');
             const voltaParams = params.dataVolta
                 ? { ...params, origem: params.destino, destino: params.origem, dataIda: params.dataVolta }
                 : null;
 
-            const [tpRes, alRes, asRes, fsIdaRes, fsVoltaRes] = await Promise.allSettled([
+            const [spRes, tpRes, alRes, asRes, fsIdaRes, fsVoltaRes] = await Promise.allSettled([
+                serpApiService.isConfigured()       ? serpApiService.buscarVoos(params)       : Promise.resolve(null),
                 travelpayoutsService.isConfigured() ? travelpayoutsService.buscarVoos(params) : Promise.resolve(null),
                 airlabsService.isConfigured()       ? airlabsService.buscarVoos(params)       : Promise.resolve(null),
                 aviationstackService.isConfigured() ? aviationstackService.buscarVoos(params) : Promise.resolve(null),
@@ -841,12 +844,14 @@ class FlightSearchService {
                 (this.rapidApi.key && voltaParams) ? this.buscarFlightsSky(voltaParams) : Promise.resolve(null),
             ]);
 
+            const spResult = spRes.status === 'fulfilled' ? spRes.value : null;
             const tpResult = tpRes.status === 'fulfilled' ? tpRes.value : null;
             const alResult = alRes.status === 'fulfilled' ? alRes.value : null;
             const asResult = asRes.status === 'fulfilled' ? asRes.value : null;
             const fsIdaResp = fsIdaRes.status === 'fulfilled' ? fsIdaRes.value : null;
             const fsVoltaResp = fsVoltaRes.status === 'fulfilled' ? fsVoltaRes.value : null;
 
+            if (spRes.status === 'rejected') console.log('⚠️ Google Flights (SerpAPI) falhou:', spRes.reason?.message);
             if (tpRes.status === 'rejected') console.log('⚠️ Travelpayouts falhou:', tpRes.reason?.message);
             if (alRes.status === 'rejected') console.log('⚠️ Airlabs falhou:', alRes.reason?.message);
             if (asRes.status === 'rejected') console.log('⚠️ AviationStack falhou:', asRes.reason?.message);
@@ -859,10 +864,14 @@ class FlightSearchService {
             if (fsIdaConv.ida.length > 0)   console.log(`✅ Flights Sky: ${fsIdaConv.ida.length} voos de ida`);
             if (fsVoltaConv.ida.length > 0)  console.log(`✅ Flights Sky: ${fsVoltaConv.ida.length} voos de volta`);
 
+            if (spResult?.ida?.length > 0)   console.log(`✅ Google Flights (SerpAPI): ${spResult.ida.length} voos de ida`);
+            if (spResult?.volta?.length > 0)  console.log(`✅ Google Flights (SerpAPI): ${spResult.volta.length} voos de volta`);
+
             const fontes = [];
             const idaListas  = [];
             const voltaListas = [];
 
+            if (spResult?.ida?.length > 0) { idaListas.push(filtrarDomestico(spResult.ida)); voltaListas.push(filtrarDomestico(spResult.volta || [])); fontes.push('google_flights'); }
             if (fsIdaConv.ida.length > 0)  { idaListas.push(filtrarDomestico(fsIdaConv.ida));   fontes.push('skyscanner'); }
             if (fsVoltaConv.ida.length > 0) { voltaListas.push(filtrarDomestico(fsVoltaConv.ida)); }
             if (tpResult?.ida?.length > 0) { idaListas.push(filtrarDomestico(tpResult.ida));  voltaListas.push(filtrarDomestico(tpResult.volta || [])); fontes.push('travelpayouts'); }
@@ -872,8 +881,11 @@ class FlightSearchService {
             if (idaListas.length > 0) {
                 resultado.ida   = mergeVoos(idaListas);
                 resultado.volta = mergeVoos(voltaListas);
-                resultado.meta.fonte = fontes.join('+');
-                console.log(`✅ ${resultado.ida.length} voos de ida e ${resultado.volta.length} de volta (fontes: ${resultado.meta.fonte})`);
+                // Badge usa a fonte primária (1ª da lista, ordenada por prioridade);
+                // fontesTodas guarda o conjunto completo para diagnóstico.
+                resultado.meta.fonte = fontes[0];
+                resultado.meta.fontesTodas = fontes.join('+');
+                console.log(`✅ ${resultado.ida.length} voos de ida e ${resultado.volta.length} de volta (fontes: ${resultado.meta.fontesTodas})`);
             }
 
             // Fallback: dados simulados para ida
