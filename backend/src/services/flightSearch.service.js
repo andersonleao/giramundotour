@@ -76,6 +76,30 @@ class FlightSearchService {
                     partida: '23:15', chegada: '20:50', diasChegada: 1,
                     escalas: 2,
                 }
+            ],
+            'REC-POA': [
+                // LATAM 13:30 → 23:40 — 10h10min, 1 escala via GRU
+                {
+                    cia: 'LA', numero: 'LA3082',
+                    partida: '13:30', chegada: '23:40', diasChegada: 0,
+                    escalas: 1,
+                    segmentos: [
+                        { companhia: 'LA', numeroVoo: 'LA3082', origem: 'REC', destino: 'GRU', partida: '', chegada: '', duracao: 195 },
+                        { companhia: 'LA', numeroVoo: 'LA3461', origem: 'GRU', destino: 'POA', partida: '', chegada: '', duracao: 115 },
+                    ]
+                }
+            ],
+            'POA-REC': [
+                // LATAM 04:45 → 15:30 — 10h45min, 1 escala via GRU
+                {
+                    cia: 'LA', numero: 'LA3462',
+                    partida: '04:45', chegada: '15:30', diasChegada: 0,
+                    escalas: 1,
+                    segmentos: [
+                        { companhia: 'LA', numeroVoo: 'LA3462', origem: 'POA', destino: 'GRU', partida: '', chegada: '', duracao: 115 },
+                        { companhia: 'LA', numeroVoo: 'LA3083', origem: 'GRU', destino: 'REC', partida: '', chegada: '', duracao: 195 },
+                    ]
+                }
             ]
         };
     }
@@ -751,6 +775,73 @@ class FlightSearchService {
     }
 
     // ============================================================
+    //  VOOS CONHECIDOS — injetados independente de APIs
+    // ============================================================
+
+    /**
+     * Converte entradas de voosReais para o formato padrão de voo.
+     * Chamado tanto no fallback simulado quanto na busca principal com dados reais.
+     */
+    gerarVoosConhecidosPorRota(params, tipo) {
+        const rotaAtual = `${params.origem}-${params.destino}`;
+        const voosConhecidos = (this.voosReais || {})[rotaAtual] || [];
+        if (voosConhecidos.length === 0) return [];
+
+        const companhiasDomesticas = [
+            { codigo: 'LA', nome: 'LATAM Airlines', cor: '#1B0088' },
+            { codigo: 'G3', nome: 'GOL Linhas Aéreas', cor: '#FF6600' },
+            { codigo: 'AD', nome: 'Azul Linhas Aéreas', cor: '#0033A0' }
+        ];
+        const companhiasInternacionais = [
+            { codigo: 'LA', nome: 'LATAM Airlines', cor: '#1B0088' },
+            { codigo: 'IB', nome: 'Iberia', cor: '#DA291C' },
+            { codigo: 'TP', nome: 'TAP Air Portugal', cor: '#00A651' },
+            { codigo: 'AF', nome: 'Air France', cor: '#002157' },
+            { codigo: 'AA', nome: 'American Airlines', cor: '#0078D2' },
+        ];
+
+        return voosConhecidos.map((v, idx) => {
+            const partTs = this.criarTimestamp(params.dataIda, v.partida);
+            const diasChegada = v.diasChegada || 0;
+            const dataChegada = this.adicionarDias(params.dataIda, diasChegada);
+            const chegaTs = this.criarTimestamp(dataChegada, v.chegada);
+
+            const [hP, mP] = v.partida.split(':').map(Number);
+            const [hC, mC] = v.chegada.split(':').map(Number);
+            const duracaoMin = (diasChegada * 24 * 60) + (hC * 60 + mC) - (hP * 60 + mP);
+
+            const cia = companhiasInternacionais.find(c => c.codigo === v.cia) || companhiasDomesticas.find(c => c.codigo === v.cia);
+            if (!cia) return null;
+
+            const preco = v.preco || Math.round((1200 + Math.random() * 800) * 100) / 100;
+            const pontosInfo = this.calcularPontos(preco, v.cia);
+
+            return {
+                id: `real-${rotaAtual}-${v.partida.replace(':','')}-${idx}`,
+                companhia: { codigo: cia.codigo, nome: cia.nome, cor: cia.cor },
+                operadoPor: null,
+                numero: v.numero || `${v.cia}${Math.floor(Math.random() * 9000) + 1000}`,
+                origem:  { codigo: params.origem,  ...this.aeroportosBR[params.origem]  || { cidade: params.origem,  nome: '', uf: '' } },
+                destino: { codigo: params.destino, ...this.aeroportosBR[params.destino] || { cidade: params.destino, nome: '', uf: '' } },
+                partida: { data: params.dataIda, horario: v.partida, timestamp: partTs },
+                chegada: { data: dataChegada,    horario: v.chegada, timestamp: chegaTs },
+                duracao: { total: duracaoMin, texto: `${Math.floor(duracaoMin/60)}h ${String(duracaoMin % 60).padStart(2,'0')}min` },
+                escalas: v.escalas ?? 1,
+                classe: params.classe || 'economica',
+                preco: { valor: preco, moeda: 'BRL', porPessoa: preco, taxas: 52.05, total: preco + 52.05 },
+                pontos: pontosInfo ? {
+                    quantidade: pontosInfo.pontos, programa: pontosInfo.programa,
+                    taxaEmbarque: pontosInfo.taxaEmbarque, valorEquivalente: pontosInfo.pontos * pontosInfo.valorPonto
+                } : null,
+                assentos: Math.floor(Math.random() * 9) + 1,
+                tipo: tipo || 'ida',
+                fonte: 'catalogo',
+                segmentos: v.segmentos && v.segmentos.length > 0 ? v.segmentos : undefined,
+            };
+        }).filter(Boolean);
+    }
+
+    // ============================================================
     //  BUSCA PRINCIPAL
     // ============================================================
 
@@ -885,12 +976,28 @@ class FlightSearchService {
             if (alResult?.ida?.length > 0) { idaListas.push(filtrarDomestico(alResult.ida));  voltaListas.push(filtrarDomestico(alResult.volta || [])); fontes.push('airlabs'); }
             if (asResult?.ida?.length > 0) { idaListas.push(filtrarDomestico(asResult.ida));  voltaListas.push(filtrarDomestico(asResult.volta || [])); fontes.push('aviationstack'); }
 
+            // Sempre injeta voos do catálogo de rotas conhecidas, independente das APIs.
+            // O mergeVoos deduplica por origem-destino-horário-cia, então voos da API têm prioridade.
+            const voosConhecidosIda = this.gerarVoosConhecidosPorRota(params, 'ida');
+            if (voosConhecidosIda.length > 0) {
+                idaListas.push(voosConhecidosIda);
+                if (!fontes.includes('catalogo')) fontes.push('catalogo');
+                console.log(`📋 Catálogo: ${voosConhecidosIda.length} voo(s) conhecido(s) para ${params.origem}-${params.destino}`);
+            }
+            if (voltaParams) {
+                const voosConhecidosVolta = this.gerarVoosConhecidosPorRota(voltaParams, 'volta');
+                if (voosConhecidosVolta.length > 0) {
+                    voltaListas.push(voosConhecidosVolta);
+                    console.log(`📋 Catálogo: ${voosConhecidosVolta.length} voo(s) conhecido(s) para ${voltaParams.origem}-${voltaParams.destino}`);
+                }
+            }
+
             if (idaListas.length > 0) {
                 resultado.ida   = mergeVoos(idaListas);
                 resultado.volta = mergeVoos(voltaListas);
                 // Badge usa a fonte primária (1ª da lista, ordenada por prioridade);
                 // fontesTodas guarda o conjunto completo para diagnóstico.
-                resultado.meta.fonte = fontes[0];
+                resultado.meta.fonte = fontes[0] !== 'catalogo' ? fontes[0] : fontes[1] || 'catalogo';
                 resultado.meta.fontesTodas = fontes.join('+');
                 console.log(`✅ ${resultado.ida.length} voos de ida e ${resultado.volta.length} de volta (fontes: ${resultado.meta.fontesTodas})`);
             }
