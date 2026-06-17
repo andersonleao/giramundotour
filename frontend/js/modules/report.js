@@ -420,50 +420,82 @@ const ReportModule = {
             return isNaN(a) || isNaN(b) ? 0 : Math.round((b - a) / 60000);
         };
 
+        // Helper: preenche timestamps vazios em segmentos usando dataPartida + durações
+        const fixarTimestamps = (segs, dataPartidaVoo) => {
+            if (!segs || segs.length === 0) return segs;
+            if (!segs.some(s => !s.partida || !s.chegada)) return segs;
+            const _toMs = iso => {
+                if (!iso) return null;
+                const s = String(iso);
+                const norm = (s.includes('Z') || s.includes('+') || s.includes('-', 10)) ? s : s + '+00:00';
+                const ms = new Date(norm).getTime();
+                return isNaN(ms) ? null : ms;
+            };
+            const _fmtISO = ms => {
+                const d = new Date(ms);
+                const pad = n => String(n).padStart(2, '0');
+                return `${d.getUTCFullYear()}-${pad(d.getUTCMonth()+1)}-${pad(d.getUTCDate())}T${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())}:00`;
+            };
+            let t = _toMs(dataPartidaVoo);
+            if (!t) return segs;
+            const connEst = 45;
+            return segs.map((seg, i) => {
+                const dur    = seg.duracao || 60;
+                const tStart = (seg.partida && _toMs(seg.partida)) ? _toMs(seg.partida) : t;
+                const tEnd   = (seg.chegada && _toMs(seg.chegada)) ? _toMs(seg.chegada) : tStart + dur * 60000;
+                t = tEnd + (i < segs.length - 1 ? connEst * 60000 : 0);
+                return { ...seg, partida: seg.partida || _fmtISO(tStart), chegada: seg.chegada || _fmtISO(tEnd) };
+            });
+        };
+
         // Helper: desenha uma linha de segmento dentro do box
         const drawSegmento = (seg, rowY) => {
             const oriAp  = getAirportByCode(seg.origem);
             const destAp = getAirportByCode(seg.destino);
-            const segH   = 22;
+            const segH   = 25;
 
             // Origem
             doc.setFontSize(11); doc.setFont('helvetica', 'bold'); doc.setTextColor(...primaryColor);
             doc.text(seg.origem, margin + 4, rowY + 7);
             doc.setFontSize(6.5); doc.setFont('helvetica', 'normal'); doc.setTextColor(100, 100, 100);
-            doc.text(oriAp?.city || '', margin + 4, rowY + 11.5);
-            doc.text(Formatter.time(seg.partida), margin + 4, rowY + 15.5);
+            doc.text(oriAp?.city || '', margin + 4, rowY + 12);
+            doc.setFontSize(9); doc.setFont('helvetica', 'bold'); doc.setTextColor(...primaryColor);
+            doc.text(Formatter.time(seg.partida), margin + 4, rowY + 19);
 
             // Seta central
             const aX1 = margin + 38, aX2 = margin + 92, aMid = (aX1 + aX2) / 2;
             doc.setDrawColor(...primaryLight); doc.setLineWidth(0.4);
-            doc.line(aX1, rowY + 8, aX2, rowY + 8);
+            doc.line(aX1, rowY + 9, aX2, rowY + 9);
             doc.setFillColor(...primaryLight);
-            doc.triangle(aX2, rowY + 8, aX2 - 2, rowY + 6, aX2 - 2, rowY + 10, 'F');
-            doc.setFontSize(6); doc.setTextColor(100, 100, 100);
-            doc.text(fmtDurMin(seg.duracao), aMid, rowY + 4.5, { align: 'center' });
+            doc.triangle(aX2, rowY + 9, aX2 - 2, rowY + 7, aX2 - 2, rowY + 11, 'F');
+            doc.setFontSize(6); doc.setFont('helvetica', 'normal'); doc.setTextColor(100, 100, 100);
+            doc.text(fmtDurMin(seg.duracao), aMid, rowY + 5.5, { align: 'center' });
             const vooNumSeg = (seg.numeroVoo || '').replace(/^(AD|G3|LA)\s*/i, '');
-            doc.text(vooNumSeg, aMid, rowY + 13, { align: 'center' });
+            doc.text(vooNumSeg, aMid, rowY + 14.5, { align: 'center' });
 
             // Destino
             doc.setFontSize(11); doc.setFont('helvetica', 'bold'); doc.setTextColor(...primaryColor);
             doc.text(seg.destino, margin + 97, rowY + 7);
             doc.setFontSize(6.5); doc.setFont('helvetica', 'normal'); doc.setTextColor(100, 100, 100);
-            doc.text(destAp?.city || '', margin + 97, rowY + 11.5);
-            doc.text(Formatter.time(seg.chegada), margin + 97, rowY + 15.5);
+            doc.text(destAp?.city || '', margin + 97, rowY + 12);
+            doc.setFontSize(9); doc.setFont('helvetica', 'bold'); doc.setTextColor(...primaryColor);
+            doc.text(Formatter.time(seg.chegada), margin + 97, rowY + 19);
 
             return segH;
         };
 
         // Helper: desenha linha de conexão/parada entre segmentos
         const drawConexao = (iataAeroporto, chegada, proximaPartida, rowY) => {
-            const connH  = 8;
+            const connH  = 10;
             const espera = diffMin(chegada, proximaPartida);
             const apCon  = getAirportByCode(iataAeroporto);
-            const label  = `Conexão em ${iataAeroporto}${apCon?.city ? ' (' + apCon.city + ')' : ''} — Aguardo: ${fmtDurMin(espera)}`;
+            const nomeAp = apCon?.city || '';
+            const aguardo = espera > 0 ? fmtDurMin(espera) : '~45min';
+            const label  = `Conexão em ${iataAeroporto}${nomeAp ? ' — ' + nomeAp : ''}   |   Tempo de conexão: ${aguardo}`;
             doc.setFillColor(255, 248, 220); doc.setDrawColor(237, 137, 54); doc.setLineWidth(0.2);
             doc.rect(margin, rowY, contentWidth, connH, 'FD');
-            doc.setFontSize(6.5); doc.setFont('helvetica', 'italic'); doc.setTextColor(130, 80, 0);
-            doc.text(label, margin + contentWidth / 2, rowY + 5.5, { align: 'center' });
+            doc.setFontSize(7); doc.setFont('helvetica', 'bold'); doc.setTextColor(130, 80, 0);
+            doc.text(label, margin + contentWidth / 2, rowY + 6.5, { align: 'center' });
             return connH;
         };
 
@@ -522,16 +554,16 @@ const ReportModule = {
             const segsReais = (voo.segmentos && voo.segmentos.length > 1) ? voo.segmentos : null;
             // segs sintéticos para voos salvos com escalas mas sem segmentos
             const segsSin  = (!segsReais && (voo.escalas || 0) > 0) ? gerarSegsSinteticos(voo) : null;
-            // segmentos que serão renderizados (reais têm prioridade)
-            const segs = segsReais || segsSin;
+            // segmentos que serão renderizados; timestamps vazios são preenchidos com base na dataPartida
+            const segs = fixarTimestamps(segsReais || segsSin, vooDataPartida);
 
             // Calcula altura dinâmica do box
-            const headerH = 16;
-            const segH    = 22;
-            const connH   = 8;
+            const headerH = 18;
+            const segH    = 25;
+            const connH   = 10;
             const boxH    = segs
                 ? headerH + segs.length * segH + (segs.length - 1) * connH
-                : 38;
+                : 44;
 
             if (y > pageHeight - (boxH + 20)) { quebraPagina(); }
 
@@ -556,7 +588,23 @@ const ReportModule = {
 
             // Classe e data
             doc.setFont('helvetica', 'normal'); doc.setFontSize(7); doc.setTextColor(100, 100, 100);
-            doc.text(`${Formatter.flightClass(voo.classe)}  |  ${Formatter.date(vooDataPartida)}`, margin + 33, boxTop + 12);
+            doc.text(`${Formatter.flightClass(voo.classe)}  |  ${Formatter.date(vooDataPartida)}`, margin + 33, boxTop + 13);
+
+            // Horários gerais do voo (canto direito do header)
+            const horaPartidaGeral = Formatter.time(vooDataPartida);
+            const horaChegadaGeral = Formatter.time(vooDataChegada);
+            doc.setFontSize(11); doc.setFont('helvetica', 'bold'); doc.setTextColor(...primaryColor);
+            doc.text(
+                `${horaPartidaGeral || '--:--'} → ${horaChegadaGeral || '--:--'}`,
+                pageWidth - margin - 4, boxTop + 8, { align: 'right' }
+            );
+            doc.setFontSize(7); doc.setFont('helvetica', 'normal'); doc.setTextColor(100, 100, 100);
+            const duracaoGeral = voo.duracao ? fmtDurMin(voo.duracao) : '';
+            const escalaGeral  = voo.escalas > 0 ? `${voo.escalas} escala${voo.escalas > 1 ? 's' : ''}` : 'Direto';
+            doc.text(
+                `${duracaoGeral}${duracaoGeral ? '  |  ' : ''}${escalaGeral}`,
+                pageWidth - margin - 4, boxTop + 14, { align: 'right' }
+            );
 
             if (segs) {
                 // ── Voo com conexões: expande segmentos (reais ou sintéticos) ──
@@ -571,13 +619,14 @@ const ReportModule = {
                 // ── Voo direto ──
                 const origemAirport  = getAirportByCode(voo.origem);
                 const destinoAirport = getAirportByCode(voo.destino);
-                const routeY = boxTop + 16;
+                const routeY = boxTop + headerH + 2;
 
                 doc.setFontSize(13); doc.setFont('helvetica', 'bold'); doc.setTextColor(...primaryColor);
                 doc.text(voo.origem, margin + 5, routeY + 5);
-                doc.setFontSize(7); doc.setFont('helvetica', 'normal'); doc.setTextColor(100, 100, 100);
+                doc.setFontSize(6.5); doc.setFont('helvetica', 'normal'); doc.setTextColor(100, 100, 100);
                 doc.text(origemAirport?.city || '', margin + 5, routeY + 10);
-                doc.text(Formatter.time(vooDataPartida), margin + 5, routeY + 14.5);
+                doc.setFontSize(10); doc.setFont('helvetica', 'bold'); doc.setTextColor(...primaryColor);
+                doc.text(Formatter.time(vooDataPartida), margin + 5, routeY + 18);
 
                 const arrowStartX = margin + 45, arrowEndX = margin + 90;
                 const arrowCenterX = (arrowStartX + arrowEndX) / 2;
@@ -585,15 +634,16 @@ const ReportModule = {
                 doc.line(arrowStartX, routeY + 5, arrowEndX, routeY + 5);
                 doc.setFillColor(...primaryLight);
                 doc.triangle(arrowEndX, routeY + 5, arrowEndX - 2.5, routeY + 3, arrowEndX - 2.5, routeY + 7, 'F');
-                doc.setFontSize(6.5); doc.setTextColor(100, 100, 100);
+                doc.setFontSize(6.5); doc.setFont('helvetica', 'normal'); doc.setTextColor(100, 100, 100);
                 doc.text(Formatter.duration(voo.duracao), arrowCenterX, routeY + 1.5, { align: 'center' });
-                doc.text(Formatter.stops(voo.escalas), arrowCenterX, routeY + 10, { align: 'center' });
+                doc.text(Formatter.stops(voo.escalas), arrowCenterX, routeY + 11, { align: 'center' });
 
                 doc.setFontSize(13); doc.setFont('helvetica', 'bold'); doc.setTextColor(...primaryColor);
                 doc.text(voo.destino, margin + 100, routeY + 5);
-                doc.setFontSize(7); doc.setFont('helvetica', 'normal'); doc.setTextColor(100, 100, 100);
+                doc.setFontSize(6.5); doc.setFont('helvetica', 'normal'); doc.setTextColor(100, 100, 100);
                 doc.text(destinoAirport?.city || '', margin + 100, routeY + 10);
-                doc.text(Formatter.time(vooDataChegada), margin + 100, routeY + 14.5);
+                doc.setFontSize(10); doc.setFont('helvetica', 'bold'); doc.setTextColor(...primaryColor);
+                doc.text(Formatter.time(vooDataChegada), margin + 100, routeY + 18);
             }
 
             y = boxTop + boxH + 4;
