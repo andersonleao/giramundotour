@@ -420,8 +420,9 @@ const ReportModule = {
             return isNaN(a) || isNaN(b) ? 0 : Math.round((b - a) / 60000);
         };
 
-        // Helper: preenche timestamps vazios em segmentos usando dataPartida + durações
-        const fixarTimestamps = (segs, dataPartidaVoo) => {
+        // Helper: preenche timestamps vazios em segmentos usando dataPartida + durações.
+        // duracaoTotalMin: duração total porta-a-porta para estimar conexão corretamente.
+        const fixarTimestamps = (segs, dataPartidaVoo, duracaoTotalMin) => {
             if (!segs || segs.length === 0) return segs;
             if (!segs.some(s => !s.partida || !s.chegada)) return segs;
             const _toMs = iso => {
@@ -438,7 +439,12 @@ const ReportModule = {
             };
             let t = _toMs(dataPartidaVoo);
             if (!t) return segs;
-            const connEst = 45;
+            // Distribui o tempo de conexão restante igualmente entre as paradas
+            const numConns = segs.length - 1;
+            const totalSegDur = segs.reduce((sum, s) => sum + (s.duracao || 60), 0);
+            const connEst = (numConns > 0 && duracaoTotalMin > totalSegDur)
+                ? Math.round((duracaoTotalMin - totalSegDur) / numConns)
+                : 45;
             return segs.map((seg, i) => {
                 const dur    = seg.duracao || 60;
                 const tStart = (seg.partida && _toMs(seg.partida)) ? _toMs(seg.partida) : t;
@@ -555,10 +561,10 @@ const ReportModule = {
             // segs sintéticos para voos salvos com escalas mas sem segmentos
             const segsSin  = (!segsReais && (voo.escalas || 0) > 0) ? gerarSegsSinteticos(voo) : null;
             // segmentos que serão renderizados; timestamps vazios são preenchidos com base na dataPartida
-            const segs = fixarTimestamps(segsReais || segsSin, vooDataPartida);
+            const segs = fixarTimestamps(segsReais || segsSin, vooDataPartida, voo.duracao);
 
             // Calcula altura dinâmica do box
-            const headerH = 18;
+            const headerH = 16;
             const segH    = 25;
             const connH   = 10;
             const boxH    = segs
@@ -588,23 +594,7 @@ const ReportModule = {
 
             // Classe e data
             doc.setFont('helvetica', 'normal'); doc.setFontSize(7); doc.setTextColor(100, 100, 100);
-            doc.text(`${Formatter.flightClass(voo.classe)}  |  ${Formatter.date(vooDataPartida)}`, margin + 33, boxTop + 13);
-
-            // Horários gerais do voo (canto direito do header)
-            const horaPartidaGeral = Formatter.time(vooDataPartida);
-            const horaChegadaGeral = Formatter.time(vooDataChegada);
-            doc.setFontSize(11); doc.setFont('helvetica', 'bold'); doc.setTextColor(...primaryColor);
-            doc.text(
-                `${horaPartidaGeral || '--:--'} → ${horaChegadaGeral || '--:--'}`,
-                pageWidth - margin - 4, boxTop + 8, { align: 'right' }
-            );
-            doc.setFontSize(7); doc.setFont('helvetica', 'normal'); doc.setTextColor(100, 100, 100);
-            const duracaoGeral = voo.duracao ? fmtDurMin(voo.duracao) : '';
-            const escalaGeral  = voo.escalas > 0 ? `${voo.escalas} escala${voo.escalas > 1 ? 's' : ''}` : 'Direto';
-            doc.text(
-                `${duracaoGeral}${duracaoGeral ? '  |  ' : ''}${escalaGeral}`,
-                pageWidth - margin - 4, boxTop + 14, { align: 'right' }
-            );
+            doc.text(`${Formatter.flightClass(voo.classe)}  |  ${Formatter.date(vooDataPartida)}`, margin + 33, boxTop + 12);
 
             if (segs) {
                 // ── Voo com conexões: expande segmentos (reais ou sintéticos) ──
