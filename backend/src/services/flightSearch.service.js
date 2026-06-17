@@ -976,28 +976,10 @@ class FlightSearchService {
             if (alResult?.ida?.length > 0) { idaListas.push(filtrarDomestico(alResult.ida));  voltaListas.push(filtrarDomestico(alResult.volta || [])); fontes.push('airlabs'); }
             if (asResult?.ida?.length > 0) { idaListas.push(filtrarDomestico(asResult.ida));  voltaListas.push(filtrarDomestico(asResult.volta || [])); fontes.push('aviationstack'); }
 
-            // Sempre injeta voos do catálogo de rotas conhecidas, independente das APIs.
-            // O mergeVoos deduplica por origem-destino-horário-cia, então voos da API têm prioridade.
-            const voosConhecidosIda = this.gerarVoosConhecidosPorRota(params, 'ida');
-            if (voosConhecidosIda.length > 0) {
-                idaListas.push(voosConhecidosIda);
-                if (!fontes.includes('catalogo')) fontes.push('catalogo');
-                console.log(`📋 Catálogo: ${voosConhecidosIda.length} voo(s) conhecido(s) para ${params.origem}-${params.destino}`);
-            }
-            if (voltaParams) {
-                const voosConhecidosVolta = this.gerarVoosConhecidosPorRota(voltaParams, 'volta');
-                if (voosConhecidosVolta.length > 0) {
-                    voltaListas.push(voosConhecidosVolta);
-                    console.log(`📋 Catálogo: ${voosConhecidosVolta.length} voo(s) conhecido(s) para ${voltaParams.origem}-${voltaParams.destino}`);
-                }
-            }
-
             if (idaListas.length > 0) {
                 resultado.ida   = mergeVoos(idaListas);
                 resultado.volta = mergeVoos(voltaListas);
-                // Badge usa a fonte primária (1ª da lista, ordenada por prioridade);
-                // fontesTodas guarda o conjunto completo para diagnóstico.
-                resultado.meta.fonte = fontes[0] !== 'catalogo' ? fontes[0] : fontes[1] || 'catalogo';
+                resultado.meta.fonte = fontes[0];
                 resultado.meta.fontesTodas = fontes.join('+');
                 console.log(`✅ ${resultado.ida.length} voos de ida e ${resultado.volta.length} de volta (fontes: ${resultado.meta.fontesTodas})`);
             }
@@ -1022,6 +1004,25 @@ class FlightSearchService {
                     tipo: 'volta'
                 });
                 resultado.volta.forEach(v => v.tipo = 'volta');
+            }
+
+            // Injeta voos do catálogo APÓS fallbacks para não suprimir voos simulados.
+            // mergeVoos deduplica: se API/simulado já retornou o mesmo horário+cia, catálogo é ignorado.
+            const voosConhecidosIda = this.gerarVoosConhecidosPorRota(params, 'ida');
+            if (voosConhecidosIda.length > 0) {
+                const antesIda = resultado.ida.length;
+                resultado.ida = mergeVoos([resultado.ida, voosConhecidosIda]);
+                const adicionados = resultado.ida.length - antesIda;
+                if (adicionados > 0) console.log(`📋 Catálogo ${params.origem}-${params.destino}: +${adicionados} voo(s), total ${resultado.ida.length}`);
+            }
+            if (voltaParams) {
+                const voosConhecidosVolta = this.gerarVoosConhecidosPorRota(voltaParams, 'volta');
+                if (voosConhecidosVolta.length > 0) {
+                    const antesVolta = resultado.volta.length;
+                    resultado.volta = mergeVoos([resultado.volta, voosConhecidosVolta]);
+                    const adicionados = resultado.volta.length - antesVolta;
+                    if (adicionados > 0) console.log(`📋 Catálogo ${voltaParams.origem}-${voltaParams.destino}: +${adicionados} voo(s), total ${resultado.volta.length}`);
+                }
             }
 
             // Calcular filtros
