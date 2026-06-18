@@ -99,6 +99,16 @@ class FlightSearchService {
                         { companhia: 'LA', numeroVoo: 'LA3462', origem: 'POA', destino: 'GRU', partida: '', chegada: '', duracao: 115 },
                         { companhia: 'LA', numeroVoo: 'LA3083', origem: 'GRU', destino: 'REC', partida: '', chegada: '', duracao: 195 },
                     ]
+                },
+                // LATAM 15:00 → 23:45 — 8h45min, 1 escala via GRU
+                {
+                    cia: 'LA', numero: 'LA3464',
+                    partida: '15:00', chegada: '23:45', diasChegada: 0,
+                    escalas: 1,
+                    segmentos: [
+                        { companhia: 'LA', numeroVoo: 'LA3464', origem: 'POA', destino: 'GRU', partida: '', chegada: '', duracao: 115 },
+                        { companhia: 'LA', numeroVoo: 'LA3085', origem: 'GRU', destino: 'REC', partida: '', chegada: '', duracao: 195 },
+                    ]
                 }
             ]
         };
