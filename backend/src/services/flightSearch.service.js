@@ -109,8 +109,12 @@ class FlightSearchService {
                 }
             ],
 
-            // ── REC ↔ BEL (Belém) via GRU ────────────────────────────────────
+            // ── REC ↔ BEL (Belém) — diretos Azul + conexões via GRU ─────────
             'REC-BEL': [
+                // Azul direto — 22:40 → 01:20 próximo dia (2h40min)
+                { cia: 'AD', numero: 'AD4949', partida: '22:40', chegada: '01:20', diasChegada: 1, escalas: 0 },
+                // Azul direto — 09:30 → 12:10 (2h40min)
+                { cia: 'AD', numero: 'AD4432', partida: '09:30', chegada: '12:10', diasChegada: 0, escalas: 0 },
                 {
                     cia: 'LA', numero: 'LA3009',
                     partida: '06:40', chegada: '17:05', diasChegada: 0, escalas: 1,
@@ -145,6 +149,10 @@ class FlightSearchService {
                 },
             ],
             'BEL-REC': [
+                // Azul direto — 06:20 → 08:50 (2h30min)
+                { cia: 'AD', numero: 'AD4987', partida: '06:20', chegada: '08:50', diasChegada: 0, escalas: 0 },
+                // Azul direto — 17:55 → 20:25 (2h30min)
+                { cia: 'AD', numero: 'AD4433', partida: '17:55', chegada: '20:25', diasChegada: 0, escalas: 0 },
                 {
                     cia: 'LA', numero: 'LA3316',
                     partida: '07:00', chegada: '17:30', diasChegada: 0, escalas: 1,
@@ -1103,7 +1111,9 @@ class FlightSearchService {
                 if (!Array.isArray(lista)) continue;
                 for (const v of lista) {
                     const cia = String(v?.companhia?.codigo || '').toUpperCase();
-                    const chave = `${v.origem?.codigo}-${v.destino?.codigo}-${v.partida?.horario}-${cia}`;
+                    // Inclui escalas na chave: voo direto e conexão no mesmo horário/cia são produtos distintos
+                    const escalasV = v.escalas ?? 0;
+                    const chave = `${v.origem?.codigo}-${v.destino?.codigo}-${v.partida?.horario}-${cia}-${escalasV}`;
                     const existing = seen.get(chave);
                     if (!existing || prioFonte(v.fonte) < prioFonte(existing.fonte)) {
                         seen.set(chave, v);
