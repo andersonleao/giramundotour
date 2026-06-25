@@ -958,12 +958,11 @@ const HoteisModule = {
 
         const vDiaria  = parseFloat(hotel.valorDiaria) || 0;
         const vTotal   = parseFloat(hotel.valorTotal)  || 0;
-        const nPessoas = parseInt(hotel.numeroPessoas) || 1;
-        const vUmaDiaria = vDiaria * nPessoas; // valor de 1 diária para todos os hóspedes
+        const nQuartos = parseInt(hotel.numeroQuartos) || 1;
+        const vUmaDiaria = vDiaria * nQuartos;
 
         if (vDiaria > 0) {
-            // Linha 1: Diária (X hóspedes) = qtd_hospedes × valor_diaria
-            linhaFin(`Diária (${nPessoas} hóspede${nPessoas !== 1 ? 's' : ''})`, vUmaDiaria);
+            linhaFin(`Diária (${nQuartos} quarto${nQuartos !== 1 ? 's' : ''})`, vUmaDiaria);
         }
         y += 4;
         // Linha 2: Total (X diárias) = valor_1_diaria × qtd_diarias
