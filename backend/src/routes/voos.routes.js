@@ -7,6 +7,12 @@ const router = express.Router();
 const { query, validationResult } = require('express-validator');
 const flightSearchService = require('../services/flightSearch.service');
 const { authMiddleware, optionalAuth } = require('../middleware/auth.middleware');
+const serpApiService       = require('../services/serpapi.service');
+const amadeusService       = require('../services/amadeus.service');
+const travelpayoutsService = require('../services/travelpayouts.service');
+const airlabsService       = require('../services/airlabs.service');
+const aviationstackService = require('../services/aviationstack.service');
+const iberiaService        = require('../services/iberia.service');
 
 /**
  * GET /api/voos/buscar
@@ -80,6 +86,27 @@ router.get('/buscar', [
             message: 'Erro ao buscar voos'
         });
     }
+});
+
+/**
+ * GET /api/voos/status
+ * Diagnóstico: quais serviços de busca estão ativos no servidor
+ */
+router.get('/status', async (req, res) => {
+    const cb = flightSearchService._quotaExcedida || {};
+    res.json({
+        success: true,
+        data: {
+            serpapi:       { configurado: serpApiService.isConfigured(),       varEnv: 'SERPAPI_KEY' },
+            amadeus:       { configurado: amadeusService.isConfigured(),       varEnv: 'AMADEUS_CLIENT_ID + AMADEUS_CLIENT_SECRET' },
+            travelpayouts: { configurado: travelpayoutsService.isConfigured(), varEnv: 'TRAVELPAYOUTS_TOKEN' },
+            airlabs:       { configurado: airlabsService.isConfigured(),       varEnv: 'AIRLABS_API_KEY' },
+            aviationstack: { configurado: aviationstackService.isConfigured(), varEnv: 'AVIATIONSTACK_KEY', quotaEsgotada: !!aviationstackService._quotaEsgotada },
+            flightsSky:    { configurado: !!(flightSearchService.rapidApi?.key), varEnv: 'RAPIDAPI_KEY', quotaEsgotada: !!cb.flightsSky },
+            iberia:        { configurado: iberiaService.isConfigured(),        varEnv: 'IBERIA_CLIENT_ID + IBERIA_CLIENT_SECRET' },
+            catalogoRotas: Object.keys(flightSearchService.voosReais || {}).length,
+        }
+    });
 });
 
 /**

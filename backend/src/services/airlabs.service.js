@@ -11,8 +11,9 @@
 
 const https = require('https');
 
-// Hubs usados para construir itinerários com 1 conexão
-const HUBS_CONEXAO = ['GRU', 'GIG', 'BSB', 'VCP', 'SSA'];
+// Hubs para itinerários com 1 conexão — somente os 3 maiores do Brasil
+// (reduz de ~22 chamadas/busca para ~8, preservando a cota gratuita de 1.000 req/mês)
+const HUBS_CONEXAO = ['GRU', 'BSB', 'SSA'];
 
 // Conexão mínima 90 min (internacional) e máxima 6h
 const CONN_MIN_MIN = 90;

@@ -22,6 +22,10 @@ class FlightSearchService {
             host: process.env.RAPIDAPI_HOST || 'flights-sky.p.rapidapi.com'
         };
 
+        // Circuit breaker: desabilita serviços que retornaram 429 (quota esgotada)
+        // Reativados ao reiniciar o processo (deploy).
+        this._quotaExcedida = { flightsSky: false, aviationStack: false };
+
         // Tabelas de conversão de pontos (valores aproximados por milha/ponto)
         this.pontosConfig = {
             'LA': { nome: 'LATAM Pass', valorPonto: 0.025, minPontos: 5000, taxaEmbarque: true },
@@ -54,16 +58,16 @@ class FlightSearchService {
             'OPS': { cidade: 'Sinop', nome: 'Pres. João Batista Figueiredo', uf: 'MT' }
         };
 
-        // Catálogo de voos reais observados (LATAM e parceiros) por rota.
+        // Catálogo de voos reais observados (LATAM, GOL, Azul e parceiros) por rota.
+        // Serve como fallback garantido quando as APIs falham ou estão sem cota.
         // partida/chegada em HH:MM, diasChegada=quantos dias depois (0=mesmo dia, 1=dia seguinte).
-        // operadoPor opcional (codeshare). escalas, numero, preco também opcionais.
+        // escalas: número de conexões. segmentos: opcional, detalha cada trecho.
         this.voosReais = {
+            // ── REC ↔ LAS (Las Vegas) ─────────────────────────────────────────
             'REC-LAS': [
-                // LATAM 16:15 → 14:01 (próximo dia) — 21h46min, 2 escalas via GRU + LAX
                 {
                     cia: 'LA', numero: 'LA8082',
-                    partida: '16:15', chegada: '14:01', diasChegada: 1,
-                    escalas: 2,
+                    partida: '16:15', chegada: '14:01', diasChegada: 1, escalas: 2,
                     segmentos: [
                         { companhia: 'LA', numeroVoo: 'LA3082', origem: 'REC', destino: 'GRU', partida: '', chegada: '', duracao: 230 },
                         { companhia: 'LA', numeroVoo: 'LA8082', origem: 'GRU', destino: 'LAX', partida: '', chegada: '', duracao: 720 },
@@ -72,19 +76,14 @@ class FlightSearchService {
                 }
             ],
             'LAS-REC': [
-                // Volta espelhada (caso usuário busque ida-e-volta)
-                {
-                    cia: 'LA', numero: 'LA8083',
-                    partida: '23:15', chegada: '20:50', diasChegada: 1,
-                    escalas: 2,
-                }
+                { cia: 'LA', numero: 'LA8083', partida: '23:15', chegada: '20:50', diasChegada: 1, escalas: 2 }
             ],
+
+            // ── REC ↔ POA (Porto Alegre) via GRU ─────────────────────────────
             'REC-POA': [
-                // LATAM 13:30 → 23:40 — 10h10min, 1 escala via GRU
                 {
                     cia: 'LA', numero: 'LA3082',
-                    partida: '13:30', chegada: '23:40', diasChegada: 0,
-                    escalas: 1,
+                    partida: '13:30', chegada: '23:40', diasChegada: 0, escalas: 1,
                     segmentos: [
                         { companhia: 'LA', numeroVoo: 'LA3082', origem: 'REC', destino: 'GRU', partida: '', chegada: '', duracao: 195 },
                         { companhia: 'LA', numeroVoo: 'LA3461', origem: 'GRU', destino: 'POA', partida: '', chegada: '', duracao: 115 },
@@ -92,26 +91,202 @@ class FlightSearchService {
                 }
             ],
             'POA-REC': [
-                // LATAM 04:45 → 15:30 — 10h45min, 1 escala via GRU
                 {
                     cia: 'LA', numero: 'LA3462',
-                    partida: '04:45', chegada: '15:30', diasChegada: 0,
-                    escalas: 1,
+                    partida: '04:45', chegada: '15:30', diasChegada: 0, escalas: 1,
                     segmentos: [
                         { companhia: 'LA', numeroVoo: 'LA3462', origem: 'POA', destino: 'GRU', partida: '', chegada: '', duracao: 115 },
                         { companhia: 'LA', numeroVoo: 'LA3083', origem: 'GRU', destino: 'REC', partida: '', chegada: '', duracao: 195 },
                     ]
                 },
-                // LATAM 15:00 → 23:45 — 8h45min, 1 escala via GRU
                 {
                     cia: 'LA', numero: 'LA3464',
-                    partida: '15:00', chegada: '23:45', diasChegada: 0,
-                    escalas: 1,
+                    partida: '15:00', chegada: '23:45', diasChegada: 0, escalas: 1,
                     segmentos: [
                         { companhia: 'LA', numeroVoo: 'LA3464', origem: 'POA', destino: 'GRU', partida: '', chegada: '', duracao: 115 },
                         { companhia: 'LA', numeroVoo: 'LA3085', origem: 'GRU', destino: 'REC', partida: '', chegada: '', duracao: 195 },
                     ]
                 }
+            ],
+
+            // ── REC ↔ BEL (Belém) via GRU ────────────────────────────────────
+            'REC-BEL': [
+                {
+                    cia: 'LA', numero: 'LA3009',
+                    partida: '06:40', chegada: '17:05', diasChegada: 0, escalas: 1,
+                    segmentos: [
+                        { companhia: 'LA', numeroVoo: 'LA3009', origem: 'REC', destino: 'GRU', partida: '06:40', chegada: '09:15', duracao: 155 },
+                        { companhia: 'LA', numeroVoo: 'LA3315', origem: 'GRU', destino: 'BEL', partida: '11:00', chegada: '14:05', duracao: 185 },
+                    ]
+                },
+                {
+                    cia: 'LA', numero: 'LA3013',
+                    partida: '11:15', chegada: '21:40', diasChegada: 0, escalas: 1,
+                    segmentos: [
+                        { companhia: 'LA', numeroVoo: 'LA3013', origem: 'REC', destino: 'GRU', partida: '11:15', chegada: '14:00', duracao: 165 },
+                        { companhia: 'LA', numeroVoo: 'LA3319', origem: 'GRU', destino: 'BEL', partida: '18:00', chegada: '21:40', duracao: 220 },
+                    ]
+                },
+                {
+                    cia: 'G3', numero: 'G31703',
+                    partida: '05:55', chegada: '14:20', diasChegada: 0, escalas: 1,
+                    segmentos: [
+                        { companhia: 'G3', numeroVoo: 'G31703', origem: 'REC', destino: 'GRU', partida: '05:55', chegada: '08:30', duracao: 155 },
+                        { companhia: 'G3', numeroVoo: 'G31163', origem: 'GRU', destino: 'BEL', partida: '10:20', chegada: '14:20', duracao: 240 },
+                    ]
+                },
+                {
+                    cia: 'AD', numero: 'AD2823',
+                    partida: '13:00', chegada: '23:20', diasChegada: 0, escalas: 1,
+                    segmentos: [
+                        { companhia: 'AD', numeroVoo: 'AD2823', origem: 'REC', destino: 'VCP', partida: '13:00', chegada: '15:45', duracao: 165 },
+                        { companhia: 'AD', numeroVoo: 'AD4283', origem: 'VCP', destino: 'BEL', partida: '19:30', chegada: '23:20', duracao: 230 },
+                    ]
+                },
+            ],
+            'BEL-REC': [
+                {
+                    cia: 'LA', numero: 'LA3316',
+                    partida: '07:00', chegada: '17:30', diasChegada: 0, escalas: 1,
+                    segmentos: [
+                        { companhia: 'LA', numeroVoo: 'LA3316', origem: 'BEL', destino: 'GRU', partida: '07:00', chegada: '10:45', duracao: 225 },
+                        { companhia: 'LA', numeroVoo: 'LA3010', origem: 'GRU', destino: 'REC', partida: '14:00', chegada: '17:30', duracao: 210 },
+                    ]
+                },
+                {
+                    cia: 'LA', numero: 'LA3320',
+                    partida: '14:20', chegada: '23:10', diasChegada: 0, escalas: 1,
+                    segmentos: [
+                        { companhia: 'LA', numeroVoo: 'LA3320', origem: 'BEL', destino: 'GRU', partida: '14:20', chegada: '18:00', duracao: 220 },
+                        { companhia: 'LA', numeroVoo: 'LA3014', origem: 'GRU', destino: 'REC', partida: '20:00', chegada: '23:10', duracao: 190 },
+                    ]
+                },
+                {
+                    cia: 'G3', numero: 'G31164',
+                    partida: '08:30', chegada: '17:55', diasChegada: 0, escalas: 1,
+                    segmentos: [
+                        { companhia: 'G3', numeroVoo: 'G31164', origem: 'BEL', destino: 'GRU', partida: '08:30', chegada: '12:25', duracao: 235 },
+                        { companhia: 'G3', numeroVoo: 'G31704', origem: 'GRU', destino: 'REC', partida: '14:30', chegada: '17:55', duracao: 205 },
+                    ]
+                },
+                {
+                    cia: 'AD', numero: 'AD4284',
+                    partida: '07:10', chegada: '17:45', diasChegada: 0, escalas: 1,
+                    segmentos: [
+                        { companhia: 'AD', numeroVoo: 'AD4284', origem: 'BEL', destino: 'VCP', partida: '07:10', chegada: '11:30', duracao: 260 },
+                        { companhia: 'AD', numeroVoo: 'AD2824', origem: 'VCP', destino: 'REC', partida: '14:10', chegada: '17:45', duracao: 215 },
+                    ]
+                },
+            ],
+
+            // ── REC ↔ MAO (Manaus) via BSB ou GRU ───────────────────────────
+            'REC-MAO': [
+                {
+                    cia: 'LA', numero: 'LA3078',
+                    partida: '07:30', chegada: '18:40', diasChegada: 0, escalas: 1,
+                    segmentos: [
+                        { companhia: 'LA', numeroVoo: 'LA3078', origem: 'REC', destino: 'BSB', partida: '07:30', chegada: '10:00', duracao: 150 },
+                        { companhia: 'LA', numeroVoo: 'LA3209', origem: 'BSB', destino: 'MAO', partida: '14:00', chegada: '18:40', duracao: 280 },
+                    ]
+                },
+                {
+                    cia: 'G3', numero: 'G31771',
+                    partida: '06:00', chegada: '18:05', diasChegada: 0, escalas: 1,
+                    segmentos: [
+                        { companhia: 'G3', numeroVoo: 'G31771', origem: 'REC', destino: 'GRU', partida: '06:00', chegada: '08:40', duracao: 160 },
+                        { companhia: 'G3', numeroVoo: 'G31083', origem: 'GRU', destino: 'MAO', partida: '13:00', chegada: '18:05', duracao: 305 },
+                    ]
+                },
+            ],
+            'MAO-REC': [
+                {
+                    cia: 'LA', numero: 'LA3210',
+                    partida: '06:00', chegada: '18:05', diasChegada: 0, escalas: 1,
+                    segmentos: [
+                        { companhia: 'LA', numeroVoo: 'LA3210', origem: 'MAO', destino: 'BSB', partida: '06:00', chegada: '10:40', duracao: 280 },
+                        { companhia: 'LA', numeroVoo: 'LA3079', origem: 'BSB', destino: 'REC', partida: '14:30', chegada: '18:05', duracao: 215 },
+                    ]
+                },
+            ],
+
+            // ── FOR ↔ BEL (Fortaleza - Belém) ───────────────────────────────
+            'FOR-BEL': [
+                {
+                    cia: 'LA', numero: 'LA3335',
+                    partida: '08:00', chegada: '17:30', diasChegada: 0, escalas: 1,
+                    segmentos: [
+                        { companhia: 'LA', numeroVoo: 'LA3335', origem: 'FOR', destino: 'GRU', partida: '08:00', chegada: '11:30', duracao: 210 },
+                        { companhia: 'LA', numeroVoo: 'LA3315', origem: 'GRU', destino: 'BEL', partida: '14:00', chegada: '17:30', duracao: 210 },
+                    ]
+                },
+                {
+                    cia: 'G3', numero: 'G31241',
+                    partida: '06:30', chegada: '14:50', diasChegada: 0, escalas: 1,
+                    segmentos: [
+                        { companhia: 'G3', numeroVoo: 'G31241', origem: 'FOR', destino: 'GRU', partida: '06:30', chegada: '09:40', duracao: 190 },
+                        { companhia: 'G3', numeroVoo: 'G31163', origem: 'GRU', destino: 'BEL', partida: '11:30', chegada: '14:50', duracao: 200 },
+                    ]
+                },
+            ],
+            'BEL-FOR': [
+                {
+                    cia: 'LA', numero: 'LA3316',
+                    partida: '06:30', chegada: '16:00', diasChegada: 0, escalas: 1,
+                    segmentos: [
+                        { companhia: 'LA', numeroVoo: 'LA3316', origem: 'BEL', destino: 'GRU', partida: '06:30', chegada: '10:15', duracao: 225 },
+                        { companhia: 'LA', numeroVoo: 'LA3336', origem: 'GRU', destino: 'FOR', partida: '13:00', chegada: '16:00', duracao: 180 },
+                    ]
+                },
+            ],
+
+            // ── SSA ↔ BEL (Salvador - Belém) ─────────────────────────────────
+            'SSA-BEL': [
+                {
+                    cia: 'LA', numero: 'LA3095',
+                    partida: '07:00', chegada: '16:30', diasChegada: 0, escalas: 1,
+                    segmentos: [
+                        { companhia: 'LA', numeroVoo: 'LA3095', origem: 'SSA', destino: 'GRU', partida: '07:00', chegada: '09:30', duracao: 150 },
+                        { companhia: 'LA', numeroVoo: 'LA3315', origem: 'GRU', destino: 'BEL', partida: '13:00', chegada: '16:30', duracao: 210 },
+                    ]
+                },
+            ],
+            'BEL-SSA': [
+                {
+                    cia: 'LA', numero: 'LA3316',
+                    partida: '08:30', chegada: '16:10', diasChegada: 0, escalas: 1,
+                    segmentos: [
+                        { companhia: 'LA', numeroVoo: 'LA3316', origem: 'BEL', destino: 'GRU', partida: '08:30', chegada: '12:15', duracao: 225 },
+                        { companhia: 'LA', numeroVoo: 'LA3096', origem: 'GRU', destino: 'SSA', partida: '14:00', chegada: '16:10', duracao: 130 },
+                    ]
+                },
+            ],
+
+            // ── GRU ↔ BEL (São Paulo Guarulhos - Belém) ─────────────────────
+            'GRU-BEL': [
+                { cia: 'LA', numero: 'LA3315', partida: '11:00', chegada: '14:05', diasChegada: 0, escalas: 0 },
+                { cia: 'LA', numero: 'LA3317', partida: '18:00', chegada: '21:30', diasChegada: 0, escalas: 0 },
+                { cia: 'G3', numero: 'G31163', partida: '10:15', chegada: '14:00', diasChegada: 0, escalas: 0 },
+                { cia: 'AD', numero: 'AD4283', partida: '08:30', chegada: '12:10', diasChegada: 0, escalas: 0 },
+            ],
+            'BEL-GRU': [
+                { cia: 'LA', numero: 'LA3316', partida: '07:00', chegada: '10:45', diasChegada: 0, escalas: 0 },
+                { cia: 'LA', numero: 'LA3318', partida: '14:20', chegada: '18:05', diasChegada: 0, escalas: 0 },
+                { cia: 'G3', numero: 'G31164', partida: '08:30', chegada: '12:25', diasChegada: 0, escalas: 0 },
+                { cia: 'AD', numero: 'AD4284', partida: '13:00', chegada: '17:00', diasChegada: 0, escalas: 0 },
+            ],
+
+            // ── GRU ↔ MAO (São Paulo - Manaus) ──────────────────────────────
+            'GRU-MAO': [
+                { cia: 'LA', numero: 'LA3207', partida: '06:00', chegada: '10:50', diasChegada: 0, escalas: 0 },
+                { cia: 'LA', numero: 'LA3205', partida: '22:00', chegada: '02:50', diasChegada: 1, escalas: 0 },
+                { cia: 'G3', numero: 'G31083', partida: '13:00', chegada: '18:05', diasChegada: 0, escalas: 0 },
+                { cia: 'AD', numero: 'AD4541', partida: '23:00', chegada: '03:40', diasChegada: 1, escalas: 0 },
+            ],
+            'MAO-GRU': [
+                { cia: 'LA', numero: 'LA3208', partida: '06:15', chegada: '11:00', diasChegada: 0, escalas: 0 },
+                { cia: 'LA', numero: 'LA3206', partida: '23:50', chegada: '04:40', diasChegada: 1, escalas: 0 },
+                { cia: 'G3', numero: 'G31084', partida: '07:15', chegada: '12:25', diasChegada: 0, escalas: 0 },
+                { cia: 'AD', numero: 'AD4542', partida: '05:00', chegada: '09:40', diasChegada: 0, escalas: 0 },
             ]
         };
     }
@@ -121,6 +296,7 @@ class FlightSearchService {
     // ============================================================
 
     async requestFlightsSky(path) {
+        if (this._quotaExcedida.flightsSky) return null;
         return new Promise((resolve) => {
             const options = {
                 hostname: this.rapidApi.host,
@@ -140,6 +316,12 @@ class FlightSearchService {
                 res.on('end', () => {
                     try {
                         const json = JSON.parse(data);
+                        if (res.statusCode === 429) {
+                            console.warn('⛔ Flights Sky: quota mensal esgotada — desabilitado até próximo deploy');
+                            this._quotaExcedida.flightsSky = true;
+                            resolve(null);
+                            return;
+                        }
                         if (res.statusCode !== 200) {
                             console.error(`❌ Flights Sky API [${res.statusCode}]:`, json.message || '');
                             resolve(null);
@@ -153,7 +335,7 @@ class FlightSearchService {
                 });
             });
 
-            req.setTimeout(10000, () => { req.destroy(); resolve(null); });
+            req.setTimeout(8000, () => { req.destroy(); resolve(null); });
             req.on('error', (err) => {
                 console.error('❌ Erro de conexão Flights Sky:', err.message);
                 resolve(null);

@@ -15,15 +15,17 @@ const http = require('http');
 
 class AviationstackService {
     constructor() {
-        this.apiKey = process.env.AVIATIONSTACK_KEY || '';
-        this.host   = 'api.aviationstack.com';
+        this.apiKey        = process.env.AVIATIONSTACK_KEY || '';
+        this.host          = 'api.aviationstack.com';
+        this._quotaEsgotada = false;
     }
 
     isConfigured() {
-        return !!this.apiKey;
+        return !!this.apiKey && !this._quotaEsgotada;
     }
 
     request(params) {
+        if (this._quotaEsgotada) return Promise.resolve(null);
         return new Promise((resolve) => {
             const qs   = new URLSearchParams({ access_key: this.apiKey, limit: '100', ...params });
             const path = `/v1/flights?${qs.toString()}`;
@@ -41,7 +43,11 @@ class AviationstackService {
                 res.on('end', () => {
                     try {
                         const json = JSON.parse(data);
-                        if (res.statusCode !== 200 || json.error) {
+                        if (res.statusCode === 429 || (json.error && json.error.code === 104)) {
+                            console.warn('⛔ AviationStack: quota mensal esgotada — desabilitado até próximo deploy');
+                            this._quotaEsgotada = true;
+                            resolve(null);
+                        } else if (res.statusCode !== 200 || json.error) {
                             console.error(`❌ AviationStack [${res.statusCode}]:`, json.error?.message || '');
                             resolve(null);
                         } else {
@@ -54,7 +60,7 @@ class AviationstackService {
                 });
             });
 
-            req.setTimeout(10000, () => { req.destroy(); resolve(null); });
+            req.setTimeout(8000, () => { req.destroy(); resolve(null); });
             req.on('error', (e) => {
                 console.error('❌ AviationStack request error:', e.message);
                 resolve(null);
