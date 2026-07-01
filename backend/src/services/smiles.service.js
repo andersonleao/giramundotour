@@ -32,7 +32,6 @@ class SmilesService {
                 adults:               params.adultos  || 1,
                 children:             params.criancas || 0,
                 infants:              params.bebes    || 0,
-                tripType:             2,
                 originAirportCode:    params.origem,
                 destinationAirportCode: params.destino,
                 departureDate:        params.dataIda,
@@ -46,7 +45,7 @@ class SmilesService {
                 'channel':     'Web',
                 'region':      'BRASIL',
                 'Accept':      'application/json',
-                'User-Agent':  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+                'User-Agent':  'SmilesMobile/6.0 (Android; com.gol.smiles)'
             };
             if (this.token) headers['authorization'] = `Bearer ${this.token}`;
 
@@ -86,6 +85,13 @@ class SmilesService {
         });
     }
 
+    _calcDuracao(partida, chegada) {
+        try {
+            const diff = new Date(chegada) - new Date(partida);
+            return Math.round(diff / 60000);
+        } catch { return 0; }
+    }
+
     _converter(response, params, tipo) {
         const flightList = response?.requestedFlightSegmentList?.[0]?.flightList;
         if (!flightList?.length) return [];
@@ -94,13 +100,15 @@ class SmilesService {
 
         for (const flight of flightList) {
             try {
-                // Prefere tarifa SMILES_CLUB; fallback para primeira disponível
-                const fare = flight.fareList?.find(f => f.fareType === 'SMILES_CLUB')
-                          || flight.fareList?.[0];
+                // Prefere SMILES_CLUB; fallback para SMILES; fallback para qualquer tarifa com milhas
+                const fare = flight.fareList?.find(f => f.type === 'SMILES_CLUB')
+                          || flight.fareList?.find(f => f.type === 'SMILES')
+                          || flight.fareList?.find(f => (f.miles || 0) > 0);
                 if (!fare) continue;
 
                 const milhas   = fare.miles || 0;
-                const taxa     = fare.tax?.total || 0;
+                // tax está em fare.g3.costTax (string BRL)
+                const taxa     = parseFloat(fare.g3?.costTax || fare.tax?.total || 0) || 0;
                 const assentos = fare.availabilityCount || 0;
                 if (milhas === 0) continue;
 
@@ -111,35 +119,35 @@ class SmilesService {
                 const origemCode  = flight.departure?.airport?.code || params.origem;
                 const destinoCode = flight.arrival?.airport?.code   || params.destino;
 
-                const duracaoH   = flight.flightDuration?.hours   || 0;
-                const duracaoM   = flight.flightDuration?.minutes  || 0;
-                const duracaoMin = duracaoH * 60 + duracaoM;
+                // flightDuration pode estar ausente → calcula pelos timestamps
+                const duracaoMin = (flight.flightDuration?.hours || 0) * 60
+                    + (flight.flightDuration?.minutes || 0)
+                    || this._calcDuracao(partida, chegada);
+                const duracaoH = Math.floor(duracaoMin / 60);
+                const duracaoM = duracaoMin % 60;
 
                 const valorEquiv = Math.round(milhas * this.valorPorMilha * 100) / 100;
 
-                const primeiraLeg = flight.leg?.[0];
-                const numeroVoo   = `${ciaCodigo}${primeiraLeg?.flightNumber || ''}`;
+                const numeroVoo = ciaCodigo;
 
-                const segmentos = flight.leg?.length > 1
-                    ? flight.leg.map(l => ({
-                        companhia:  l.airline?.code || ciaCodigo,
-                        numeroVoo:  `${l.airline?.code || ciaCodigo}${l.flightNumber || ''}`,
-                        origem:     l.departure?.airport?.code || '',
-                        destino:    l.arrival?.airport?.code   || '',
-                        partida:    l.departure?.date || '',
-                        chegada:    l.arrival?.date   || '',
-                        duracao:    (l.duration?.hours || 0) * 60 + (l.duration?.minutes || 0)
-                    }))
-                    : undefined;
+                // Segmentos: API retorna em fare.legListCost ex: "REC-CGH / CGH-POA"
+                let segmentos;
+                if (flight.stops > 0 && fare.legListCost) {
+                    const legs = fare.legListCost.split(' / ').map(l => l.trim());
+                    segmentos = legs.map(l => {
+                        const [org, dst] = l.split('-');
+                        return { companhia: ciaCodigo, numeroVoo: ciaCodigo, origem: org, destino: dst, partida: '', chegada: '', duracao: 0 };
+                    });
+                }
 
                 voos.push({
-                    id: `smiles-${flight.uid || numeroVoo}-${tipo}`,
+                    id: `smiles-${flight.uid || ciaCodigo}-${tipo}`,
                     companhia: {
                         codigo: ciaCodigo,
                         nome:   ciaNome,
                         cor:    ciaCodigo === 'G3' ? '#FF6600' : '#666666'
                     },
-                    numero:  numeroVoo,
+                    numero:  `${ciaCodigo}${flight.uid ? flight.uid.substring(0, 4) : ''}`,
                     origem:  {
                         codigo: origemCode,
                         cidade: flight.departure?.airport?.city || '',
