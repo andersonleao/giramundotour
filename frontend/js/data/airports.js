@@ -86,6 +86,7 @@ const AIRPORTS = [
     // América do Sul
     { code: 'EZE', name: 'Aeropuerto Internacional Ezeiza', city: 'Buenos Aires', country: 'Argentina', countryCode: 'AR', metro: 'Buenos Aires' },
     { code: 'AEP', name: 'Aeroparque Jorge Newbery', city: 'Buenos Aires', country: 'Argentina', countryCode: 'AR', metro: 'Buenos Aires' },
+    { code: 'MDZ', name: 'Aeropuerto Internacional El Plumerillo', city: 'Mendoza', country: 'Argentina', countryCode: 'AR' },
     { code: 'SCL', name: 'Aeropuerto Internacional de Santiago', city: 'Santiago', country: 'Chile', countryCode: 'CL' },
     { code: 'LIM', name: 'Aeropuerto Internacional Jorge Chávez', city: 'Lima', country: 'Peru', countryCode: 'PE' },
     { code: 'BOG', name: 'Aeropuerto Internacional El Dorado', city: 'Bogotá', country: 'Colômbia', countryCode: 'CO' },
