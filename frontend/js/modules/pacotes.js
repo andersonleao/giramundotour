@@ -641,22 +641,22 @@ const PacotesModule = {
                         </select>
                     </div>
                 </td>
-                <td>
+                <td style="min-width:230px">
                     <input type="text" id="svc_desc_${i}" class="form-control form-control-sm" value="${s.descricao||''}"
                            placeholder="Descrição do serviço"
                            oninput="PacotesModule._onServicoChange(${i},'descricao',this.value)">
                     ${s.tipo === 'hotel' ? `
-                    <div class="d-flex gap-1 mt-1">
-                        <div class="input-group input-group-sm" style="max-width:120px" title="Nº de diárias (calculado pelas datas)">
+                    <div class="d-flex flex-wrap gap-1 mt-1 align-items-center">
+                        <div class="input-group input-group-sm flex-nowrap" style="width:110px" title="Nº de diárias (calculado pelas datas)">
                             <span class="input-group-text px-1"><i class="bi bi-moon-stars"></i></span>
-                            <input type="number" id="svc_diarias_${i}" class="form-control text-center" min="0"
+                            <input type="number" id="svc_diarias_${i}" class="form-control text-center px-1" min="0"
                                    value="${s.diarias||''}" placeholder="diárias"
                                    onchange="PacotesModule._onServicoChange(${i},'diarias',this.value)">
                         </div>
-                        <select id="svc_apto_${i}" class="form-select form-select-sm" style="max-width:150px"
+                        <select id="svc_apto_${i}" class="form-select form-select-sm" style="width:150px"
                                 title="Tipo de apartamento"
                                 onchange="PacotesModule._onServicoChange(${i},'tipoApto',this.value)">
-                            ${['duplo','triplo','quadruplo','quintuplo'].map(a =>
+                            ${['single','duplo','triplo','quadruplo','quintuplo'].map(a =>
                                 `<option value="${a}" ${s.tipoApto===a?'selected':''}>${this._labelApto(a)}</option>`).join('')}
                         </select>
                     </div>` : ''}
@@ -1167,6 +1167,7 @@ const PacotesModule = {
 
     _labelApto(v) {
         return {
+            single:    'Apto Single',
             duplo:     'Apto Duplo',
             triplo:    'Apto Triplo',
             quadruplo: 'Apto Quádruplo',
