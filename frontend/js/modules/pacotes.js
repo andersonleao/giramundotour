@@ -880,7 +880,7 @@ const PacotesModule = {
         const dPar = p.dataPartida ? this._fmtData(p.dataPartida) : '-';
         const dRet = p.dataRetorno ? this._fmtData(p.dataRetorno) : '-';
         doc.setFont('helvetica','normal'); doc.setFontSize(9); doc.setTextColor(200,230,255);
-        doc.text(`${dPar}  >  ${dRet}`, pw - mg - 4, y + 13, { align:'right' });
+        doc.text(`Período: ${dPar} a ${dRet}`, pw - mg - 4, y + 13, { align:'right' });
         // Segunda linha: nomeViagem + pax
         if (p.nomeViagem) {
             doc.setFont('helvetica','italic'); doc.setFontSize(10); doc.setTextColor(200,225,255);

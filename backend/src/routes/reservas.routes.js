@@ -231,23 +231,9 @@ function extrairBilheteAzul(apiData, pageHtml, pageText) {
 
     console.log('[Reservas] Booking API:', entry.url);
     const root = entry.data?.data || entry.data || {};
-    console.log('[Reservas] root keys:', Object.keys(root));
 
     const journeys = root.journeys || root.booking?.journeys || [];
     console.log('[Reservas] journeys:', journeys.length);
-
-    if (journeys.length > 0) {
-        const j0 = journeys[0];
-        console.log('[Reservas] journey[0] keys:', Object.keys(j0));
-
-        // Mostra os segmentos
-        const segs0 = j0.segments || j0.legs || [];
-        console.log('[Reservas] segs count:', segs0.length);
-        if (segs0.length > 0) {
-            console.log('[Reservas] seg[0] keys:', Object.keys(segs0[0]));
-            console.log('[Reservas] seg[0] full:', JSON.stringify(segs0[0]).substring(0, 1000));
-        }
-    }
 
     const passageiroNome = extrairPassageiro(root, pageHtml);
     console.log('[Reservas] passageiro:', passageiroNome);
@@ -277,7 +263,6 @@ function extrairBilheteAzul(apiData, pageHtml, pageText) {
                 e.url.includes('b2c-api.voeazul.com.br')
             );
             if (jkEntry) {
-                console.log('[Reservas] journeyKeys entry:', JSON.stringify(jkEntry.data).substring(0, 500));
                 // Tenta parsear chaves do array/objeto retornado
                 const raw = jkEntry.data?.data || jkEntry.data || [];
                 const keys = Array.isArray(raw) ? raw : Object.values(raw).flat();

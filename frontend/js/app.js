@@ -486,13 +486,19 @@ const App = {
         }
 
         try {
-            const response = await ApiService.auth.changePassword(senhaAtual, novaSenha);
+            const resp = await apiCall('/api/auth/password', {
+                method: 'PUT',
+                body: JSON.stringify({ senhaAtual, novaSenha })
+            });
+            if (!resp) return;
 
-            if (response && response.success) {
+            const json = await resp.json();
+
+            if (resp.ok && json.success) {
                 bootstrap.Modal.getInstance(document.getElementById('senhaModal')).hide();
                 this.showToast('Senha alterada com sucesso!', 'success');
             } else {
-                this.showToast(response?.message || 'Erro ao alterar senha', 'error');
+                this.showToast(json?.message || 'Erro ao alterar senha', 'error');
             }
         } catch (error) {
             this.showToast('Erro ao conectar com o servidor', 'error');
