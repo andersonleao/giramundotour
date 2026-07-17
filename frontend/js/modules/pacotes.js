@@ -468,6 +468,10 @@ const PacotesModule = {
             if (vUnit !== undefined) s.valorUnit = this._parseMoeda(vUnit);
             const vTot = v(`svc_valorTotal_${i}`);
             if (vTot !== undefined) s.valorTotal = this._parseMoeda(vTot);
+            const diarias = v(`svc_diarias_${i}`);
+            if (diarias !== undefined) s.diarias = +diarias || 0;
+            const apto = v(`svc_apto_${i}`);
+            if (apto !== undefined) s.tipoApto = apto;
         });
     },
 
@@ -564,7 +568,8 @@ const PacotesModule = {
         this._servicos.push({
             tipo, descricao: '', fornecedor: '',
             dataInicio: '', dataFim: '', quantidade: 1,
-            valorUnit: 0, valorTotal: 0, obs: '', imagem: null
+            valorUnit: 0, valorTotal: 0, obs: '', imagem: null,
+            diarias: 0, tipoApto: tipo === 'hotel' ? 'duplo' : ''
         });
         this._renderizarServicos();
         this._recalcular();
@@ -578,8 +583,8 @@ const PacotesModule = {
 
     _onServicoChange(idx, campo, valor) {
         if (!this._servicos[idx]) return;
-        this._servicos[idx][campo] = campo === 'quantidade' || campo === 'valorUnit' || campo === 'valorTotal'
-            ? this._parseMoeda(valor) : valor;
+        const numFields = ['quantidade', 'valorUnit', 'valorTotal', 'diarias'];
+        this._servicos[idx][campo] = numFields.includes(campo) ? this._parseMoeda(valor) : valor;
 
         if (campo === 'quantidade' || campo === 'valorUnit') {
             this._servicos[idx].valorTotal = this._servicos[idx].quantidade * this._servicos[idx].valorUnit;
@@ -589,6 +594,19 @@ const PacotesModule = {
             this._servicos[idx].valorUnit = this._servicos[idx].quantidade > 0
                 ? this._servicos[idx].valorTotal / this._servicos[idx].quantidade : 0;
         }
+
+        // Hotel: calcula diárias automaticamente a partir do check-in → check-out
+        if (this._servicos[idx].tipo === 'hotel' && (campo === 'dataInicio' || campo === 'dataFim')) {
+            const d = this._calcDiarias(this._servicos[idx].dataInicio, this._servicos[idx].dataFim);
+            if (d > 0) {
+                this._servicos[idx].diarias = d;
+                const dEl = document.getElementById(`svc_diarias_${idx}`);
+                if (dEl) dEl.value = d;
+            }
+        }
+
+        // Mudou o tipo → re-renderiza para mostrar/ocultar os campos de hotel
+        if (campo === 'tipo') this._renderizarServicos();
 
         this._recalcular();
     },
@@ -627,6 +645,21 @@ const PacotesModule = {
                     <input type="text" id="svc_desc_${i}" class="form-control form-control-sm" value="${s.descricao||''}"
                            placeholder="Descrição do serviço"
                            oninput="PacotesModule._onServicoChange(${i},'descricao',this.value)">
+                    ${s.tipo === 'hotel' ? `
+                    <div class="d-flex gap-1 mt-1">
+                        <div class="input-group input-group-sm" style="max-width:120px" title="Nº de diárias (calculado pelas datas)">
+                            <span class="input-group-text px-1"><i class="bi bi-moon-stars"></i></span>
+                            <input type="number" id="svc_diarias_${i}" class="form-control text-center" min="0"
+                                   value="${s.diarias||''}" placeholder="diárias"
+                                   onchange="PacotesModule._onServicoChange(${i},'diarias',this.value)">
+                        </div>
+                        <select id="svc_apto_${i}" class="form-select form-select-sm" style="max-width:150px"
+                                title="Tipo de apartamento"
+                                onchange="PacotesModule._onServicoChange(${i},'tipoApto',this.value)">
+                            ${['duplo','triplo','quadruplo','quintuplo'].map(a =>
+                                `<option value="${a}" ${s.tipoApto===a?'selected':''}>${this._labelApto(a)}</option>`).join('')}
+                        </select>
+                    </div>` : ''}
                 </td>
                 <td>
                     <input type="text" id="svc_forn_${i}" class="form-control form-control-sm" value="${s.fornecedor||''}"
@@ -957,8 +990,15 @@ const PacotesModule = {
                 // Tipo
                 doc.text((tInfo.label||'').substring(0,9), cx, y + 5); cx += cols.tipo;
 
-                // Descrição — clipa para caber na coluna
-                const descFit = doc.splitTextToSize(s.descricao||'', cols.desc - 2);
+                // Descrição — clipa para caber na coluna. Hotel inclui diárias e tipo de apto.
+                let descTxt = s.descricao || '';
+                if (s.tipo === 'hotel') {
+                    const extras = [];
+                    if (+s.diarias > 0) extras.push(`${+s.diarias} diária${+s.diarias > 1 ? 's' : ''}`);
+                    if (s.tipoApto)     extras.push(this._labelApto(s.tipoApto));
+                    if (extras.length)  descTxt = (descTxt ? descTxt + ' — ' : '') + extras.join(', ');
+                }
+                const descFit = doc.splitTextToSize(descTxt, cols.desc - 2);
                 doc.text(descFit[0] || '', cx, y + 5); cx += cols.desc;
 
                 // Fornecedor — clipa
@@ -1115,6 +1155,23 @@ const PacotesModule = {
         const s = iso.slice(0, 10);
         const [y, m, dd] = s.split('-');
         return (y && m && dd && y.length === 4) ? `${dd}/${m}/${y}` : s;
+    },
+
+    _calcDiarias(dtI, dtF) {
+        if (!dtI || !dtF) return 0;
+        const a = new Date(String(dtI).slice(0, 10) + 'T12:00:00');
+        const b = new Date(String(dtF).slice(0, 10) + 'T12:00:00');
+        const diff = Math.round((b - a) / 86400000);
+        return diff > 0 ? diff : 0;
+    },
+
+    _labelApto(v) {
+        return {
+            duplo:     'Apto Duplo',
+            triplo:    'Apto Triplo',
+            quadruplo: 'Apto Quádruplo',
+            quintuplo: 'Apto Quíntuplo',
+        }[v] || v || '';
     },
 };
 
