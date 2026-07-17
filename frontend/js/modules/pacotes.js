@@ -893,34 +893,91 @@ const PacotesModule = {
             });
         }
 
+        // Cabeçalho idêntico ao relatório de Cotação (ReportModule.gerarCotacaoPDF)
         const _header = () => {
-            // Fundo azul
-            doc.setFillColor(26, 54, 93);
+            const primaryColor = [26, 54, 93];
+
+            // Fundo do cabeçalho
+            doc.setFillColor(...primaryColor);
             doc.rect(0, 0, pw, 45, 'F');
-            // Logo
-            if (logoB64) doc.addImage(logoB64, 'PNG', mg - 1, 6, 33, 33);
+
+            // Logomarca com fundo branco arredondado para contraste
+            if (logoB64) {
+                try {
+                    doc.setFillColor(255, 255, 255);
+                    doc.roundedRect(mg + 1, 6, 33, 33, 4, 4, 'F');
+                    doc.addImage(logoB64, 'PNG', mg + 2, 7, 31, 31);
+                } catch (e) { console.warn('Erro ao adicionar logo no PDF:', e); }
+            }
+
             // Nome da empresa
-            doc.setFont('helvetica','bold'); doc.setFontSize(22); doc.setTextColor(255,255,255);
-            doc.text('GiraMundoTour', mg + 38, 25);
-            doc.setFont('helvetica','normal'); doc.setFontSize(9); doc.setTextColor(180,210,255);
-            doc.text('Sua viagem começa aqui', mg + 38, 33);
-            // Contato (direita)
-            doc.setFontSize(8); doc.setTextColor(220,235,255);
-            const rx = pw - mg;
-            doc.text(CONFIG.empresa.email || '', rx, 14, { align:'right' });
-            doc.text(CONFIG.empresa.telefone || '', rx, 20, { align:'right' });
-            doc.text(CONFIG.empresa.instagram || '', rx, 26, { align:'right' });
+            const textoX = logoB64 ? mg + 40 : mg;
+            doc.setTextColor(255, 255, 255);
+            doc.setFontSize(24);
+            doc.setFont('helvetica', 'bold');
+            doc.text('GiraMundoTour', textoX, 25);
+
+            // Slogan
+            doc.setFontSize(10);
+            doc.setFont('helvetica', 'normal');
+            doc.text(CONFIG.empresa.slogan, textoX, 33);
+
+            // Dados da empresa (direita) com ícones de WhatsApp / Instagram
+            const contactX = pw - mg;
+            let contactY = 12;
+            const iconSize = 4;
+            const wppIcon = ReportModule._gerarIconeWhatsApp();
+            const igIcon  = ReportModule._gerarIconeInstagram();
+
+            // Email
+            doc.setFontSize(8);
+            doc.setFont('helvetica', 'normal');
+            doc.setTextColor(255, 255, 255);
+            doc.text(CONFIG.empresa.email, contactX, contactY, { align: 'right' });
+            contactY += 5.5;
+
+            // WhatsApp telefone 1
+            const tel1Text  = CONFIG.empresa.telefone;
+            const tel1Width = doc.getTextWidth(tel1Text);
+            doc.text(tel1Text, contactX, contactY, { align: 'right' });
+            try { doc.addImage(wppIcon, 'PNG', contactX - tel1Width - iconSize - 1.5, contactY - iconSize + 0.8, iconSize, iconSize); } catch(e) {}
+            contactY += 4.5;
+
+            // WhatsApp telefone 2
+            const tel2Text  = CONFIG.empresa.telefone2;
+            const tel2Width = doc.getTextWidth(tel2Text);
+            doc.setTextColor(255, 255, 255);
+            doc.text(tel2Text, contactX, contactY, { align: 'right' });
+            try { doc.addImage(wppIcon, 'PNG', contactX - tel2Width - iconSize - 1.5, contactY - iconSize + 0.8, iconSize, iconSize); } catch(e) {}
+            contactY += 5.5;
+
+            // Instagram
+            const igText  = CONFIG.empresa.instagram;
+            const igWidth = doc.getTextWidth(igText);
+            doc.setTextColor(255, 255, 255);
+            doc.text(igText, contactX, contactY, { align: 'right' });
+            try { doc.addImage(igIcon, 'PNG', contactX - igWidth - iconSize - 1.5, contactY - iconSize + 0.8, iconSize, iconSize); } catch(e) {}
         };
 
-        const _footer = (pgNum, total) => {
-            doc.setDrawColor(66, 153, 225); doc.setLineWidth(0.4);
-            doc.line(mg, ph - 18, pw - mg, ph - 18);
-            doc.setFont('helvetica','bold'); doc.setFontSize(8); doc.setTextColor(40,40,40);
-            doc.text(CONFIG.empresa.nome || 'GiraMundoTour', mg, ph - 13);
-            doc.text(`CNPJ: ${CONFIG.empresa.cnpj || ''}`, pw - mg, ph - 13, { align:'right' });
-            doc.setFont('helvetica','normal'); doc.setFontSize(7); doc.setTextColor(100,100,100);
-            doc.text(`${CONFIG.empresa.email} | ${CONFIG.empresa.telefone} | ${CONFIG.empresa.telefone2}`, pw/2, ph - 8, { align:'center' });
-            doc.text(`Página ${pgNum} / ${total}`, pw - mg, ph - 8, { align:'right' });
+        // Rodapé idêntico ao relatório de Cotação
+        const _footer = () => {
+            const primaryLight = [66, 153, 225];
+            const footerY = ph - 20;
+            doc.setDrawColor(...primaryLight);
+            doc.setLineWidth(0.5);
+            doc.line(mg, footerY, pw - mg, footerY);
+
+            doc.setFontSize(8);
+            doc.setFont('helvetica', 'bold');
+            doc.setTextColor(60, 60, 60);
+            doc.text(CONFIG.empresa.nome, mg, footerY + 5);
+            doc.setFont('helvetica', 'normal');
+            doc.setTextColor(100, 100, 100);
+            doc.text('CNPJ: ' + CONFIG.empresa.cnpj, pw - mg, footerY + 5, { align: 'right' });
+
+            const footerContatos = CONFIG.empresa.email + '  |  ' + CONFIG.empresa.telefone + '  |  ' + CONFIG.empresa.telefone2 + '  |  ' + CONFIG.empresa.instagram;
+            doc.setFontSize(7);
+            doc.text(footerContatos, pw / 2, footerY + 10, { align: 'center' });
         };
 
         const _checkPage = (needed) => {
@@ -1166,7 +1223,7 @@ const PacotesModule = {
         const totalPages = doc.getNumberOfPages();
         for (let i = 1; i <= totalPages; i++) {
             doc.setPage(i);
-            _footer(i, totalPages);
+            _footer();
         }
 
         const nome = (p.nomeViagem || p.destino || 'pacote').replace(/\s+/g,'-').toLowerCase();
