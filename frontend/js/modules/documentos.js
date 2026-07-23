@@ -50,17 +50,18 @@ const DocumentosModule = {
                         </div>
                         <div class="modal-body">
                             <div class="mb-3">
-                                <label class="form-label fw-semibold">Arquivo <span class="text-danger">*</span></label>
-                                <input type="file" id="docArquivo" class="form-control"
+                                <label class="form-label fw-semibold">Arquivos <span class="text-danger">*</span></label>
+                                <input type="file" id="docArquivo" class="form-control" multiple
                                        accept=".pdf,.doc,.docx,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
                                        onchange="DocumentosModule._onArquivo(event)">
-                                <div class="form-text">Formatos aceitos: PDF, DOC, DOCX — máx. 12 MB.</div>
+                                <div class="form-text">Formatos aceitos: PDF, DOC, DOCX — máx. 12 MB cada. Você pode selecionar vários.</div>
                                 <div id="docArquivoInfo" class="mt-2"></div>
                             </div>
                             <div class="row g-3">
                                 <div class="col-md-7">
                                     <label class="form-label fw-semibold">Nome do documento <span class="text-danger">*</span></label>
                                     <input type="text" id="docNome" class="form-control" placeholder="Ex: Contrato de Prestação de Serviços">
+                                    <div class="form-text" id="docNomeHelp"></div>
                                 </div>
                                 <div class="col-md-5">
                                     <label class="form-label fw-semibold">Categoria</label>
@@ -190,16 +191,19 @@ const DocumentosModule = {
     // ── Modal de importação ──────────────────────────────────────────
 
     abrirModal() {
-        this._arquivoBase64 = null;
-        this._arquivoMime = null;
+        this._arquivos = [];
         const set = (id, v) => { const el = document.getElementById(id); if (el) el.value = v; };
         set('docNome', '');
         set('docDescricao', '');
         set('docCategoria', this.CATEGORIAS[0]);
+        const nomeEl = document.getElementById('docNome');
+        if (nomeEl) nomeEl.disabled = false;
         const fileEl = document.getElementById('docArquivo');
         if (fileEl) fileEl.value = '';
         const info = document.getElementById('docArquivoInfo');
         if (info) info.innerHTML = '';
+        const help = document.getElementById('docNomeHelp');
+        if (help) help.textContent = '';
 
         new bootstrap.Modal(document.getElementById('modalDocumento')).show();
     },
@@ -208,86 +212,126 @@ const DocumentosModule = {
         bootstrap.Modal.getInstance(document.getElementById('modalDocumento'))?.hide();
     },
 
-    _onArquivo(event) {
-        const file = event.target.files[0];
+    async _onArquivo(event) {
+        const files = Array.from(event.target.files || []);
         const info = document.getElementById('docArquivoInfo');
-        if (!file) { if (info) info.innerHTML = ''; return; }
+        this._arquivos = [];
+        if (!files.length) { if (info) info.innerHTML = ''; this._atualizarCampoNome(); return; }
 
-        // Valida extensão / tipo
-        const nome = file.name.toLowerCase();
-        const ok = nome.endsWith('.pdf') || nome.endsWith('.doc') || nome.endsWith('.docx');
-        if (!ok) {
-            App.showToast('Formato inválido. Envie um arquivo PDF, DOC ou DOCX.', 'warning');
-            event.target.value = '';
-            if (info) info.innerHTML = '';
-            return;
+        // Valida cada arquivo (formato e tamanho); os inválidos são ignorados
+        const validos = [];
+        for (const file of files) {
+            const nome = file.name.toLowerCase();
+            const ok = nome.endsWith('.pdf') || nome.endsWith('.doc') || nome.endsWith('.docx');
+            if (!ok) { App.showToast(`"${file.name}" ignorado: formato inválido.`, 'warning'); continue; }
+            if (file.size > this.MAX_BYTES) { App.showToast(`"${file.name}" ignorado: maior que 12 MB.`, 'warning'); continue; }
+            validos.push(file);
         }
-        if (file.size > this.MAX_BYTES) {
-            App.showToast('Arquivo muito grande. Máximo 12 MB.', 'warning');
-            event.target.value = '';
-            if (info) info.innerHTML = '';
-            return;
-        }
+        if (!validos.length) { event.target.value = ''; if (info) info.innerHTML = ''; this._atualizarCampoNome(); return; }
 
-        // Preenche o nome automaticamente se ainda estiver vazio
-        const nomeEl = document.getElementById('docNome');
-        if (nomeEl && !nomeEl.value.trim()) {
-            nomeEl.value = file.name.replace(/\.(pdf|docx?)$/i, '').trim() || file.name;
-        }
+        // Lê todos como base64
+        const lidos = await Promise.all(validos.map(f => this._lerArquivo(f)));
+        this._arquivos = lidos.filter(Boolean);
 
-        const reader = new FileReader();
-        reader.onload = (e) => {
-            this._arquivoBase64 = e.target.result; // data:...;base64,....
-            this._arquivoMime   = file.type || '';
-            this._arquivoNomeOriginal = file.name;
-            if (info) {
-                const ic = this._iconeTipo(nome.endsWith('.pdf') ? 'pdf' : 'word');
-                info.innerHTML = `
-                    <div class="alert alert-light border d-flex align-items-center gap-2 mb-0 py-2">
-                        <i class="bi ${ic.icon}" style="font-size:1.4rem; color:${ic.cor}"></i>
+        // Lista dos arquivos selecionados
+        if (info) {
+            info.innerHTML = this._arquivos.map(a => {
+                const ic = this._iconeTipo(a.tipo);
+                return `
+                    <div class="alert alert-light border d-flex align-items-center gap-2 mb-1 py-2">
+                        <i class="bi ${ic.icon}" style="font-size:1.3rem; color:${ic.cor}"></i>
                         <div>
-                            <strong>${this._esc(file.name)}</strong>
-                            <span class="text-muted small ms-2">${this._fmtTamanho(file.size)}</span>
+                            <strong>${this._esc(a.nomeOriginal)}</strong>
+                            <span class="text-muted small ms-2">${this._fmtTamanho(a.size)}</span>
                         </div>
                     </div>`;
+            }).join('');
+        }
+        this._atualizarCampoNome();
+    },
+
+    _lerArquivo(file) {
+        return new Promise(res => {
+            const reader = new FileReader();
+            reader.onload = (e) => res({
+                base64:       e.target.result, // data:...;base64,....
+                mime:         file.type || '',
+                nomeOriginal: file.name,
+                size:         file.size,
+                tipo:         file.name.toLowerCase().endsWith('.pdf') ? 'pdf' : 'word',
+            });
+            reader.onerror = () => res(null);
+            reader.readAsDataURL(file);
+        });
+    },
+
+    // Ajusta o campo "Nome": editável com 1 arquivo; desativado (usa nome próprio) com vários
+    _atualizarCampoNome() {
+        const nomeEl = document.getElementById('docNome');
+        const help   = document.getElementById('docNomeHelp');
+        const n = (this._arquivos || []).length;
+        if (!nomeEl) return;
+
+        if (n === 1) {
+            nomeEl.disabled = false;
+            if (!nomeEl.value.trim()) {
+                const orig = this._arquivos[0].nomeOriginal;
+                nomeEl.value = orig.replace(/\.(pdf|docx?)$/i, '').trim() || orig;
             }
-        };
-        reader.readAsDataURL(file);
+            if (help) help.textContent = '';
+        } else if (n > 1) {
+            nomeEl.value = '';
+            nomeEl.disabled = true;
+            if (help) help.textContent = `${n} arquivos selecionados — cada um será salvo com o próprio nome.`;
+        } else {
+            nomeEl.disabled = false;
+            if (help) help.textContent = '';
+        }
     },
 
     async salvar() {
         if (this._salvando) return;
 
-        const nome = document.getElementById('docNome')?.value?.trim();
-        if (!this._arquivoBase64) { App.showToast('Selecione um arquivo', 'warning'); return; }
-        if (!nome)                { App.showToast('Informe o nome do documento', 'warning'); return; }
+        const arquivos = this._arquivos || [];
+        if (!arquivos.length) { App.showToast('Selecione ao menos um arquivo', 'warning'); return; }
 
-        const payload = {
-            nome,
-            descricao:      document.getElementById('docDescricao')?.value?.trim() || null,
-            categoria:      document.getElementById('docCategoria')?.value || null,
-            mimeType:       this._arquivoMime || null,
-            conteudoBase64: this._arquivoBase64,
-        };
+        const categoria = document.getElementById('docCategoria')?.value || null;
+        const descricao = document.getElementById('docDescricao')?.value?.trim() || null;
+        const nomeUnico = document.getElementById('docNome')?.value?.trim();
+
+        // Com um único arquivo o nome é obrigatório; com vários, usa-se o nome de cada arquivo
+        if (arquivos.length === 1 && !nomeUnico) { App.showToast('Informe o nome do documento', 'warning'); return; }
 
         const btn = document.getElementById('btnSalvarDoc');
         const btnHtml = btn?.innerHTML;
         this._salvando = true;
-        if (btn) { btn.disabled = true; btn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span> Importando...'; }
+        if (btn) btn.disabled = true;
 
+        let ok = 0, fail = 0;
         try {
-            const resp = await apiCall('/api/documentos', { method: 'POST', body: JSON.stringify(payload) });
-            if (!resp) return;
-            const result = await resp.json();
-            if (resp.ok && result.success) {
-                App.showToast('Documento importado com sucesso!', 'success');
+            for (let i = 0; i < arquivos.length; i++) {
+                const a = arquivos[i];
+                const nome = arquivos.length === 1
+                    ? nomeUnico
+                    : (a.nomeOriginal.replace(/\.(pdf|docx?)$/i, '').trim() || a.nomeOriginal);
+
+                if (btn) btn.innerHTML = `<span class="spinner-border spinner-border-sm me-1"></span> Importando ${i + 1}/${arquivos.length}...`;
+
+                const payload = { nome, descricao, categoria, mimeType: a.mime || null, conteudoBase64: a.base64 };
+                try {
+                    const resp = await apiCall('/api/documentos', { method: 'POST', body: JSON.stringify(payload) });
+                    const result = resp && await resp.json();
+                    if (resp && resp.ok && result && result.success) ok++; else fail++;
+                } catch (e) { fail++; }
+            }
+
+            if (ok > 0) {
+                App.showToast(`${ok} documento${ok > 1 ? 's' : ''} importado${ok > 1 ? 's' : ''}${fail ? ` — ${fail} com erro` : ''}!`, fail ? 'warning' : 'success');
                 this.fecharModal();
                 await this.loadList();
             } else {
-                App.showToast(result.message || 'Erro ao importar documento', 'error');
+                App.showToast('Erro ao importar documento(s)', 'error');
             }
-        } catch (e) {
-            App.showToast('Erro ao importar documento', 'error');
         } finally {
             this._salvando = false;
             if (btn && btn.isConnected) { btn.disabled = false; btn.innerHTML = btnHtml; }
