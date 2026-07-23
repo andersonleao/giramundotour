@@ -614,7 +614,14 @@ class FlightSearchService {
             EU: ['IB', 'BA', 'AF', 'KL', 'LH'],
         };
 
-        const companhias = isInternacional ? companhiasInternacionais : companhiasDomesticas;
+        let companhias = isInternacional ? companhiasInternacionais : companhiasDomesticas;
+
+        // Azul (AD) opera voos para Punta del Este (PDP). Inclui a Azul nas rotas
+        // que envolvem PDP, sem afetar as demais rotas internacionais (Europa/EUA).
+        const envolvePDP = params.origem === 'PDP' || params.destino === 'PDP';
+        if (envolvePDP && !companhias.some(c => c.codigo === 'AD')) {
+            companhias = [{ codigo: 'AD', nome: 'Azul Linhas Aéreas', cor: '#0033A0' }, ...companhias];
+        }
 
         // Detecta região do destino para escolher parceiros de codeshare LATAM coerentes.
         const aeroportosUS = new Set(['JFK','LGA','EWR','LAX','BUR','LGB','ORD','MDW','ATL','DFW','DAL','SFO','OAK','SJC','MCO','BOS','IAD','DCA','BWI','LAS','MIA','SEA','DEN','PHX','SAN','HNL','IAH']);
