@@ -26,6 +26,7 @@ const airlinesRoutes  = require('./routes/airlines.routes');
 const hotéisRoutes    = require('./routes/hoteis.routes');
 const monitoramentosRoutes = require('./routes/monitoramentos.routes');
 const pacotesRoutes        = require('./routes/pacotes.routes');
+const documentosRoutes     = require('./routes/documentos.routes');
 const importacaoRoutes     = require('./routes/importacao.routes');
 const AlertasService  = require('./services/alertas.service');
 const MonitoramentoService = require('./services/monitoramento.service');
@@ -100,6 +101,7 @@ app.use(`${API_PREFIX}/airlines`, airlinesRoutes);
 app.use(`${API_PREFIX}/hoteis`,   hotéisRoutes);
 app.use(`${API_PREFIX}/monitoramentos`, monitoramentosRoutes);
 app.use(`${API_PREFIX}/pacotes`,        pacotesRoutes);
+app.use(`${API_PREFIX}/documentos`,     documentosRoutes);
 app.use(`${API_PREFIX}/importacao`,     importacaoRoutes);
 
 // Rota para servir o frontend (SPA)

@@ -21,6 +21,7 @@ const App = {
         MonitoramentoModule.init();
         UsuariosModule.init();
         DashboardModule.init();
+        DocumentosModule.init();
         ReportModule.init();
 
         // Aplica permissões de menu do usuário logado
@@ -174,6 +175,10 @@ const App = {
             case 'carimbo':
                 CarimboModule.render();
                 break;
+
+            case 'documentos':
+                DocumentosModule.render();
+                break;
         }
     },
 
@@ -222,7 +227,7 @@ const App = {
      * Retorna a primeira página que o usuário pode acessar
      */
     getFirstAllowedPage() {
-        const ordem = ['busca', 'dashboard', 'cotacao', 'pacotes', 'bilhetes', 'faturas', 'reservas', 'hoteis', 'monitoramento', 'clientes', 'fornecedores', 'usuarios'];
+        const ordem = ['busca', 'dashboard', 'cotacao', 'pacotes', 'documentos', 'bilhetes', 'faturas', 'reservas', 'hoteis', 'monitoramento', 'clientes', 'fornecedores', 'usuarios'];
         for (const p of ordem) {
             if (this.hasAccess(p)) return p;
         }
