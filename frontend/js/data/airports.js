@@ -91,6 +91,7 @@ const AIRPORTS = [
     { code: 'LIM', name: 'Aeropuerto Internacional Jorge Chávez', city: 'Lima', country: 'Peru', countryCode: 'PE' },
     { code: 'BOG', name: 'Aeropuerto Internacional El Dorado', city: 'Bogotá', country: 'Colômbia', countryCode: 'CO' },
     { code: 'MVD', name: 'Aeropuerto Internacional de Carrasco', city: 'Montevidéu', country: 'Uruguai', countryCode: 'UY' },
+    { code: 'PDP', name: 'Aeropuerto Internacional de Punta del Este (Capitán Curbelo)', city: 'Punta del Este', country: 'Uruguai', countryCode: 'UY' },
 
     // Ásia
     { code: 'NRT', name: 'Narita International Airport', city: 'Tóquio', country: 'Japão', countryCode: 'JP', metro: 'Tóquio' },
