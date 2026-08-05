@@ -482,15 +482,13 @@ const TicketsModule = {
      * Popula selects do modal
      */
     async popularSelectsModal() {
-        // Clientes
+        // Clientes — sempre busca da API para pegar cadastros recentes
         const selectCliente = document.getElementById('bilheteCliente');
         if (selectCliente) {
-            if (this._clientes.length === 0) {
-                const resp = await apiCall('/api/clientes');
-                if (resp) {
-                    const result = await resp.json();
-                    this._clientes = result.data || [];
-                }
+            const resp = await apiCall('/api/clientes');
+            if (resp) {
+                const result = await resp.json();
+                this._clientes = result.data || [];
             }
             selectCliente.innerHTML = '<option value="">Selecione o cliente...</option>' +
                 this._clientes.map(c => `<option value="${c.id}">${c.nome}</option>`).join('');
@@ -506,12 +504,10 @@ const TicketsModule = {
         // Fornecedores
         const selectFornecedor = document.getElementById('bilheteFornecedor');
         if (selectFornecedor) {
-            if (this._fornecedores.length === 0) {
-                const resp = await apiCall('/api/fornecedores');
-                if (resp) {
-                    const result = await resp.json();
-                    this._fornecedores = result.data || [];
-                }
+            const resp = await apiCall('/api/fornecedores');
+            if (resp) {
+                const result = await resp.json();
+                this._fornecedores = result.data || [];
             }
             selectFornecedor.innerHTML = '<option value="">Selecione o fornecedor...</option>' +
                 this._fornecedores.map(f => `<option value="${f.id}">${f.nome}</option>`).join('');
