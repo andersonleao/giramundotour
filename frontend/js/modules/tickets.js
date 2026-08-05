@@ -165,6 +165,13 @@ const TicketsModule = {
                                                name="codigoReserva" required placeholder="Ex: ABC123">
                                     </div>
 
+                                    <div class="col-12">
+                                        <label class="form-label">Passageiro(s)</label>
+                                        <input type="text" class="form-control" id="bilhetePassageiro"
+                                               name="passageiroNome" placeholder="Ex: João da Silva, Maria da Silva">
+                                        <small class="text-muted">Separe múltiplos passageiros por vírgula. Usado no recibo.</small>
+                                    </div>
+
                                     <div class="col-md-6">
                                         <label class="form-label">Companhia Aérea *</label>
                                         <select class="form-select" id="bilheteCompanhia" name="companhia" required>
@@ -2603,6 +2610,7 @@ const TicketsModule = {
         document.getElementById('bilheteId').value = id;
         document.getElementById('bilheteCliente').value = bilhete.clienteId;
         document.getElementById('bilheteCodigoReserva').value = bilhete.codigoReserva;
+        document.getElementById('bilhetePassageiro').value = bilhete.passageiroNome || '';
         document.getElementById('bilheteCompanhia').value = bilhete.companhia;
         document.getElementById('bilheteFornecedor').value = bilhete.fornecedorId;
         document.getElementById('bilheteDataIda').value = Formatter.dateForInput(bilhete.dataIda);
@@ -2731,6 +2739,7 @@ const TicketsModule = {
         const dados = {
             clienteId: document.getElementById('bilheteCliente').value || null,
             codigoReserva: document.getElementById('bilheteCodigoReserva').value.trim().toUpperCase(),
+            passageiroNome: document.getElementById('bilhetePassageiro').value.trim(),
             companhia: document.getElementById('bilheteCompanhia').value,
             fornecedorId: document.getElementById('bilheteFornecedor').value || null,
             dataIda: document.getElementById('bilheteDataIda').value,
