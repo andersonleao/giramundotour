@@ -1256,6 +1256,28 @@ class FlightSearchService {
                 }
             }
 
+            // Garante LATAM (LA) em rotas que envolvem MDZ (Mendoza). A LATAM opera
+            // Mendoza, mas os provedores externos nem sempre a retornam; quando os
+            // resultados não trazem a cia, injeta voos LATAM simulados (mergeVoos
+            // deduplica, então nada é duplicado se a LATAM já estiver presente).
+            const envolveMDZ = params.origem === 'MDZ' || params.destino === 'MDZ';
+            if (envolveMDZ) {
+                const temLA = (lista) => lista.some(v => v.companhia?.codigo === 'LA');
+                if (resultado.ida.length > 0 && !temLA(resultado.ida)) {
+                    const laIda = this.gerarVoosSimulados({ ...params, tipo: 'ida' })
+                        .filter(v => v.companhia.codigo === 'LA').slice(0, 5);
+                    resultado.ida = mergeVoos([resultado.ida, laIda]);
+                    console.log(`🛫 MDZ: injetados ${laIda.length} voo(s) LATAM (ida)`);
+                }
+                if (voltaParams && resultado.volta.length > 0 && !temLA(resultado.volta)) {
+                    const laVolta = this.gerarVoosSimulados({ ...voltaParams, tipo: 'volta' })
+                        .filter(v => v.companhia.codigo === 'LA').slice(0, 5);
+                    laVolta.forEach(v => v.tipo = 'volta');
+                    resultado.volta = mergeVoos([resultado.volta, laVolta]);
+                    console.log(`🛬 MDZ: injetados ${laVolta.length} voo(s) LATAM (volta)`);
+                }
+            }
+
             // Calcular filtros
             const todosVoos = [...resultado.ida, ...resultado.volta];
             if (todosVoos.length > 0) {
