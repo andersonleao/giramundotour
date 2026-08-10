@@ -325,6 +325,8 @@ const SearchModule = {
                     taxaEmbarque: voo.pontos.taxaEmbarque
                 } : null,
                 segmentos: voo.segmentos || undefined,
+                precoTipo: voo.precoTipo || null,
+                fonte: voo.fonte || null,
                 tipo
             };
         };
@@ -494,6 +496,17 @@ const SearchModule = {
             `;
         }
 
+        // Selo da origem do preço: o agente precisa distinguir tarifa real de
+        // equivalente em milhas antes de cotar para o cliente.
+        let precoTipoHtml = '';
+        if (voo.precoTipo === 'milhas') {
+            precoTipoHtml = `<small class="d-block text-warning" style="font-size:0.68rem;" title="Valor equivalente das milhas, não é tarifa em dinheiro"><i class="bi bi-star-fill me-1"></i>equivalente em milhas</small>`;
+        } else if (voo.precoTipo === 'estimado') {
+            precoTipoHtml = `<small class="d-block text-danger" style="font-size:0.68rem;" title="Preço calculado por distância — a fonte não fornece tarifas. Confirme antes de cotar."><i class="bi bi-exclamation-triangle-fill me-1"></i>preço estimado</small>`;
+        } else if (voo.precoTipo === 'dinheiro') {
+            precoTipoHtml = `<small class="d-block text-success" style="font-size:0.68rem;"><i class="bi bi-check-circle-fill me-1"></i>tarifa real</small>`;
+        }
+
         return `
             <div class="row align-items-center">
                 <div class="col-md-2 text-center mb-3 mb-md-0">
@@ -532,6 +545,7 @@ const SearchModule = {
                 <div class="col-md-3 text-center">
                     <div class="flight-price">${Formatter.currency(preco)}</div>
                     <div class="flight-price-label">por pessoa</div>
+                    ${precoTipoHtml}
                     ${departureDate ? `<small class="text-muted d-block mt-1"><i class="bi bi-calendar3 me-1"></i>${departureDate}</small>` : ''}
                     ${pontosHtml}
                 </div>

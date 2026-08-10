@@ -1284,6 +1284,42 @@ class FlightSearchService {
                 }
             }
 
+            // Origem do preço de cada voo. Só SerpAPI/Travelpayouts/Iberia/Skyscanner
+            // devolvem tarifa real em dinheiro. Airlabs e AviationStack são APIs de
+            // malha aérea, sem tarifas — o preço delas vem de fórmula de distância
+            // (200 + km * 0.15) e chegava a ficar 48% abaixo do real no mesmo voo.
+            // Smiles devolve equivalente em milhas, não dinheiro.
+            const FONTES_DINHEIRO = new Set(['google_flights', 'travelpayouts', 'iberia', 'skyscanner']);
+            const FONTES_MILHAS   = new Set(['smiles']);
+            const classificarPreco = (v) => {
+                const f = v.fonte || 'simulado';
+                if (FONTES_DINHEIRO.has(f)) return 'dinheiro';
+                if (FONTES_MILHAS.has(f))   return 'milhas';
+                return 'estimado';
+            };
+
+            // Havendo tarifa real na rota, descarta os voos de preço estimado para
+            // não cotar valor inexistente. Sem nenhuma tarifa real (ex.: quota da
+            // SerpAPI esgotada), mantém os estimados para a busca não voltar vazia.
+            const priorizarPrecoReal = (lista) => {
+                lista.forEach(v => { v.precoTipo = classificarPreco(v); });
+                if (!lista.some(v => v.precoTipo === 'dinheiro')) return lista;
+                return lista.filter(v => v.precoTipo !== 'estimado');
+            };
+
+            const antesIdaTotal = resultado.ida.length;
+            const antesVoltaTotal = resultado.volta.length;
+            resultado.ida   = priorizarPrecoReal(resultado.ida);
+            resultado.volta = priorizarPrecoReal(resultado.volta);
+
+            resultado.meta.precoReal = resultado.ida.some(v => v.precoTipo === 'dinheiro');
+            const descartados = (antesIdaTotal - resultado.ida.length) + (antesVoltaTotal - resultado.volta.length);
+            if (descartados > 0) {
+                console.log(`💰 ${descartados} voo(s) de preço estimado descartado(s) — rota tem tarifa real`);
+            } else if (!resultado.meta.precoReal) {
+                console.log('⚠️ Nenhuma tarifa real na rota — exibindo preços estimados');
+            }
+
             // Calcular filtros
             const todosVoos = [...resultado.ida, ...resultado.volta];
             if (todosVoos.length > 0) {
