@@ -86,10 +86,11 @@ class SerpApiFlightsService {
     }
 
     /**
-     * Faz requisição HTTPS para a SerpAPI.
+     * Faz uma requisição HTTPS única para a SerpAPI.
+     * Retorna { json, status, limitada } — `limitada` indica 429/throttling,
+     * caso em que vale a pena repetir a chamada.
      */
-    async _request(queryParams) {
-        queryParams.api_key = this.apiKey;
+    async _requestUnico(queryParams) {
         const path = `/search.json?${new URLSearchParams(queryParams).toString()}`;
 
         return new Promise((resolve) => {
@@ -105,34 +106,65 @@ class SerpApiFlightsService {
                 let raw = '';
                 res.on('data', chunk => raw += chunk);
                 res.on('end', () => {
+                    const status = res.statusCode;
+                    let json = null;
                     try {
-                        const json = JSON.parse(raw);
-                        if (json.error) {
-                            console.error('❌ SerpAPI erro:', json.error);
-                            resolve(null);
-                        } else {
-                            resolve(json);
-                        }
+                        json = JSON.parse(raw);
                     } catch (e) {
-                        console.error('❌ SerpAPI parse error:', e.message);
-                        resolve(null);
+                        console.error(`❌ SerpAPI parse error [${status}]:`, e.message);
+                        return resolve({ json: null, status, limitada: status === 429 });
                     }
+
+                    // O plano gratuito permite apenas 2 buscas simultâneas e ~50/hora.
+                    // Ao estourar, a SerpAPI responde 429 (ou um error de throttling)
+                    // — antes isso era descartado em silêncio e a busca perdia a LATAM.
+                    const limitada = status === 429 ||
+                        (json?.error && /rate|limit|throttl|concurrent|too many/i.test(json.error));
+
+                    if (json?.error) {
+                        console.error(`❌ SerpAPI erro [${status}]:`, json.error);
+                        return resolve({ json: null, status, limitada });
+                    }
+                    resolve({ json, status, limitada: false });
                 });
             });
 
             req.on('error', (e) => {
                 console.error('❌ SerpAPI conexão error:', e.message);
-                resolve(null);
+                resolve({ json: null, status: 0, limitada: false });
             });
 
             req.setTimeout(15000, () => {
                 console.error('❌ SerpAPI timeout');
                 req.destroy();
-                resolve(null);
+                resolve({ json: null, status: 0, limitada: false });
             });
 
             req.end();
         });
+    }
+
+    /**
+     * Requisição com retry em backoff para 429/throttling.
+     * Só repete quando o erro é de limite — falhas definitivas retornam de imediato.
+     */
+    async _request(queryParams, tentativas = 3) {
+        queryParams.api_key = this.apiKey;
+
+        for (let i = 0; i < tentativas; i++) {
+            const { json, limitada } = await this._requestUnico(queryParams);
+            if (json) return json;
+            if (!limitada) return null;
+
+            if (i < tentativas - 1) {
+                const espera = 1500 * Math.pow(2, i); // 1.5s, 3s
+                console.warn(`⏳ SerpAPI limitada (429) — retry ${i + 1}/${tentativas - 1} em ${espera}ms`);
+                await new Promise(r => setTimeout(r, espera));
+            } else {
+                console.error('❌ SerpAPI: limite persistente após retries');
+            }
+        }
+        return null;
     }
 
     /**
@@ -264,7 +296,10 @@ class SerpApiFlightsService {
     }
 
     /**
-     * Busca principal: faz duas buscas one-way em paralelo (ida + volta se solicitado).
+     * Busca principal: faz duas buscas one-way em sequência (ida + volta se solicitado).
+     * Sequencial de propósito: o plano gratuito aceita apenas 2 buscas simultâneas, e
+     * disparar ida+volta em paralelo ocupava as duas vagas — qualquer busca concorrente
+     * virava 429 e a SerpAPI sumia do resultado (deixando só a Smiles, sem LATAM).
      * Retorna { ida: [...], volta: [...] } ou null se não configurado.
      */
     async buscarVoos(params) {
@@ -273,17 +308,13 @@ class SerpApiFlightsService {
             return null;
         }
 
-        const promises = [
-            this._buscarSentido(params.origem, params.destino, params.dataIda, params)
-        ];
+        const respostaIda = await this._buscarSentido(
+            params.origem, params.destino, params.dataIda, params
+        );
 
-        if (params.dataVolta) {
-            promises.push(
-                this._buscarSentido(params.destino, params.origem, params.dataVolta, params)
-            );
-        }
-
-        const [respostaIda, respostaVolta] = await Promise.all(promises);
+        const respostaVolta = params.dataVolta
+            ? await this._buscarSentido(params.destino, params.origem, params.dataVolta, params)
+            : null;
 
         const ida = this._converterItinerarios(respostaIda, 'ida', params);
         const volta = respostaVolta

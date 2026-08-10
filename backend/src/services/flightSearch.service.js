@@ -7,7 +7,6 @@
 
 const https = require('https');
 const serpApiService = require('./serpapi.service');
-const amadeusService = require('./amadeus.service');
 const travelpayoutsService = require('./travelpayouts.service');
 const airlabsService = require('./airlabs.service');
 const aviationstackService = require('./aviationstack.service');
@@ -1118,7 +1117,7 @@ class FlightSearchService {
         // Preferência: Skyscanner (preço real) > Travelpayouts > Airlabs > AviationStack.
         const mergeVoos = (listas) => {
             const seen = new Map(); // chave → voo preferido
-            const fonteOrder = ['google_flights', 'smiles', 'iberia', 'skyscanner', 'amadeus', 'travelpayouts', 'airlabs', 'aviationstack'];
+            const fonteOrder = ['google_flights', 'smiles', 'iberia', 'skyscanner', 'travelpayouts', 'airlabs', 'aviationstack'];
             const prioFonte = (f) => { const i = fonteOrder.indexOf(f); return i === -1 ? 99 : i; };
             for (const lista of listas) {
                 if (!Array.isArray(lista)) continue;
@@ -1140,7 +1139,7 @@ class FlightSearchService {
             // Executa todas as fontes em paralelo para maximizar cobertura de rotas.
             // SerpAPI (Google Flights) é a FONTE PRIMÁRIA — preços e horários reais.
             // Amadeus é a fonte secundária gratuita (cobre quando a cota do SerpAPI esgota).
-            console.log('✈️ Buscando em paralelo: Google Flights (SerpAPI) + Smiles + Amadeus + Iberia + Skyscanner + Travelpayouts + Airlabs + AviationStack...');
+            console.log('✈️ Buscando em paralelo: Google Flights (SerpAPI) + Smiles + Iberia + Skyscanner + Travelpayouts + Airlabs + AviationStack...');
             const voltaParams = params.dataVolta
                 ? { ...params, origem: params.destino, destino: params.origem, dataIda: params.dataVolta }
                 : null;
@@ -1148,9 +1147,11 @@ class FlightSearchService {
             // Iberia só opera rotas internacionais — não buscar em voos 100% domésticos BR
             const iberiaBuscarIda  = iberiaService.isConfigured() && !isDomestico ? iberiaService.buscarVoos(params) : Promise.resolve(null);
 
-            const [spRes, amRes, tpRes, alRes, asRes, fsIdaRes, fsVoltaRes, smIdaRes, smVoltaRes, ibRes] = await Promise.allSettled([
+            // Amadeus removida: o portal Self-Service foi descomissionado em 17/07/2026
+            // e test.api.amadeus.com não resolve mais em DNS — era ENOTFOUND garantido
+            // a cada busca. Reativar exige credencial Enterprise e novo host.
+            const [spRes, tpRes, alRes, asRes, fsIdaRes, fsVoltaRes, smIdaRes, smVoltaRes, ibRes] = await Promise.allSettled([
                 serpApiService.isConfigured()       ? serpApiService.buscarVoos(params)       : Promise.resolve(null),
-                amadeusService.isConfigured()       ? amadeusService.buscarVoos(params)       : Promise.resolve(null),
                 travelpayoutsService.isConfigured() ? travelpayoutsService.buscarVoos(params) : Promise.resolve(null),
                 airlabsService.isConfigured()       ? airlabsService.buscarVoos(params)       : Promise.resolve(null),
                 aviationstackService.isConfigured() ? aviationstackService.buscarVoos(params) : Promise.resolve(null),
@@ -1162,7 +1163,6 @@ class FlightSearchService {
             ]);
 
             const spResult    = spRes.status      === 'fulfilled' ? spRes.value      : null;
-            const amResult    = amRes.status      === 'fulfilled' ? amRes.value      : null;
             const tpResult    = tpRes.status      === 'fulfilled' ? tpRes.value      : null;
             const alResult    = alRes.status      === 'fulfilled' ? alRes.value      : null;
             const asResult    = asRes.status      === 'fulfilled' ? asRes.value      : null;
@@ -1173,7 +1173,6 @@ class FlightSearchService {
             const ibResult     = ibRes.status      === 'fulfilled' ? ibRes.value      : null;
 
             if (spRes.status      === 'rejected') console.log('⚠️ Google Flights (SerpAPI) falhou:', spRes.reason?.message);
-            if (amRes.status      === 'rejected') console.log('⚠️ Amadeus falhou:', amRes.reason?.message);
             if (tpRes.status      === 'rejected') console.log('⚠️ Travelpayouts falhou:', tpRes.reason?.message);
             if (alRes.status      === 'rejected') console.log('⚠️ Airlabs falhou:', alRes.reason?.message);
             if (asRes.status      === 'rejected') console.log('⚠️ AviationStack falhou:', asRes.reason?.message);
@@ -1191,7 +1190,6 @@ class FlightSearchService {
 
             if (spResult?.ida?.length > 0)     console.log(`✅ Google Flights (SerpAPI): ${spResult.ida.length} voos de ida`);
             if (spResult?.volta?.length > 0)    console.log(`✅ Google Flights (SerpAPI): ${spResult.volta.length} voos de volta`);
-            if (amResult?.ida?.length > 0)     console.log(`✅ Amadeus: ${amResult.ida.length} voos de ida`);
             if (smIdaResult?.ida?.length > 0)   console.log(`✅ Smiles: ${smIdaResult.ida.length} voos de ida`);
             if (smVoltaResult?.ida?.length > 0) console.log(`✅ Smiles: ${smVoltaResult.ida.length} voos de volta`);
             if (ibResult?.ida?.length > 0)      console.log(`✅ Iberia: ${ibResult.ida.length} voos de ida`);
@@ -1207,7 +1205,6 @@ class FlightSearchService {
             if (ibResult?.ida?.length > 0)       { idaListas.push(ibResult.ida);  fontes.push('iberia'); }
             if (ibResult?.volta?.length > 0)     { voltaListas.push(ibResult.volta); }
             if (fsIdaConv.ida.length > 0)        { idaListas.push(filtrarDomestico(fsIdaConv.ida)); fontes.push('skyscanner'); }
-            if (amResult?.ida?.length > 0)       { idaListas.push(filtrarDomestico(amResult.ida));  voltaListas.push(filtrarDomestico(amResult.volta || [])); fontes.push('amadeus'); }
             if (fsVoltaConv.ida.length > 0)      { voltaListas.push(filtrarDomestico(fsVoltaConv.ida)); }
             if (tpResult?.ida?.length > 0)       { idaListas.push(filtrarDomestico(tpResult.ida));  voltaListas.push(filtrarDomestico(tpResult.volta || [])); fontes.push('travelpayouts'); }
             if (alResult?.ida?.length > 0)       { idaListas.push(filtrarDomestico(alResult.ida));  voltaListas.push(filtrarDomestico(alResult.volta || [])); fontes.push('airlabs'); }
