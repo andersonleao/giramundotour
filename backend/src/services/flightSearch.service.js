@@ -55,8 +55,14 @@ class FlightSearchService {
             'VIX': { cidade: 'Vitória', nome: 'Eurico Salles', uf: 'ES' },
             'CGB': { cidade: 'Cuiabá', nome: 'Marechal Rondon', uf: 'MT' },
             'GYN': { cidade: 'Goiânia', nome: 'Santa Genoveva', uf: 'GO' },
-            'OPS': { cidade: 'Sinop', nome: 'Pres. João Batista Figueiredo', uf: 'MT' }
+            'OPS': { cidade: 'Sinop', nome: 'Pres. João Batista Figueiredo', uf: 'MT' },
+            'IGU': { cidade: 'Foz do Iguaçu', nome: 'Cataratas', uf: 'PR' }
         };
+
+        // Aeroportos onde a LATAM (LA) opera regularmente mas os provedores
+        // externos frequentemente não retornam a companhia. Nessas rotas a busca
+        // injeta voos LATAM ao final (mergeVoos deduplica se já vierem da API).
+        this.aeroportosLatamGarantida = new Set(['MDZ', 'IGU']);
 
         // Catálogo de voos reais observados (LATAM, GOL, Azul e parceiros) por rota.
         // Serve como fallback garantido quando as APIs falham ou estão sem cota.
@@ -1256,25 +1262,28 @@ class FlightSearchService {
                 }
             }
 
-            // Garante LATAM (LA) em rotas que envolvem MDZ (Mendoza). A LATAM opera
-            // Mendoza, mas os provedores externos nem sempre a retornam; quando os
-            // resultados não trazem a cia, injeta voos LATAM simulados (mergeVoos
-            // deduplica, então nada é duplicado se a LATAM já estiver presente).
-            const envolveMDZ = params.origem === 'MDZ' || params.destino === 'MDZ';
-            if (envolveMDZ) {
-                const temLA = (lista) => lista.some(v => v.companhia?.codigo === 'LA');
+            // Garante LATAM (LA) nas rotas de aeroportosLatamGarantida (MDZ, IGU...).
+            // A LATAM opera esses destinos, mas os provedores externos nem sempre a
+            // retornam; quando os resultados não trazem a cia, injeta voos LATAM
+            // simulados (mergeVoos deduplica, então nada é duplicado se já houver LA).
+            const aptoLatam = this.aeroportosLatamGarantida.has(params.origem)
+                ? params.origem
+                : this.aeroportosLatamGarantida.has(params.destino) ? params.destino : null;
+            if (aptoLatam) {
+                // JJ é o código legado da LATAM Brasil — conta como LATAM presente.
+                const temLA = (lista) => lista.some(v => ['LA', 'JJ'].includes(v.companhia?.codigo));
                 if (resultado.ida.length > 0 && !temLA(resultado.ida)) {
                     const laIda = this.gerarVoosSimulados({ ...params, tipo: 'ida' })
                         .filter(v => v.companhia.codigo === 'LA').slice(0, 5);
                     resultado.ida = mergeVoos([resultado.ida, laIda]);
-                    console.log(`🛫 MDZ: injetados ${laIda.length} voo(s) LATAM (ida)`);
+                    console.log(`🛫 ${aptoLatam}: injetados ${laIda.length} voo(s) LATAM (ida)`);
                 }
                 if (voltaParams && resultado.volta.length > 0 && !temLA(resultado.volta)) {
                     const laVolta = this.gerarVoosSimulados({ ...voltaParams, tipo: 'volta' })
                         .filter(v => v.companhia.codigo === 'LA').slice(0, 5);
                     laVolta.forEach(v => v.tipo = 'volta');
                     resultado.volta = mergeVoos([resultado.volta, laVolta]);
-                    console.log(`🛬 MDZ: injetados ${laVolta.length} voo(s) LATAM (volta)`);
+                    console.log(`🛬 ${aptoLatam}: injetados ${laVolta.length} voo(s) LATAM (volta)`);
                 }
             }
 
