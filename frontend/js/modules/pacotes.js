@@ -323,6 +323,10 @@ const PacotesModule = {
                                     onclick="PacotesModule.gerarPDF('${p.id}')">
                                 <i class="bi bi-file-earmark-pdf"></i>
                             </button>
+                            <button class="btn btn-sm btn-outline-info" title="Duplicar orçamento"
+                                    onclick="PacotesModule.duplicar('${p.id}')">
+                                <i class="bi bi-copy"></i>
+                            </button>
                             <button class="btn btn-sm btn-outline-primary" title="Editar"
                                     onclick="PacotesModule.abrirModal('${p.id}')">
                                 <i class="bi bi-pencil"></i>
@@ -367,14 +371,23 @@ const PacotesModule = {
 
     // ── Modal ────────────────────────────────────────────────────────
 
-    async abrirModal(id) {
-        this._editandoId = id || null;
+    // Duplicar: carrega o pacote de origem no formulário como um NOVO pacote.
+    // Nada é gravado até o usuário clicar em Salvar — evita registro órfão se ele desistir.
+    duplicar(id) {
+        return this.abrirModal(id, { duplicar: true });
+    },
+
+    async abrirModal(id, opts = {}) {
+        const duplicando = !!opts.duplicar;
+        this._editandoId = duplicando ? null : (id || null);
         this._servicos   = [];
 
         const titulo = document.getElementById('modalPacoteTitulo');
-        if (titulo) titulo.innerHTML = id
-            ? '<i class="bi bi-pencil-square me-2"></i>Editar Pacote'
-            : '<i class="bi bi-suitcase-lg me-2"></i>Novo Pacote de Viagem';
+        if (titulo) titulo.innerHTML = duplicando
+            ? '<i class="bi bi-copy me-2"></i>Duplicar Pacote'
+            : id
+                ? '<i class="bi bi-pencil-square me-2"></i>Editar Pacote'
+                : '<i class="bi bi-suitcase-lg me-2"></i>Novo Pacote de Viagem';
 
         // Resetar form
         this._limparForm();
@@ -382,15 +395,24 @@ const PacotesModule = {
         if (id) {
             try {
                 const resp = await apiCall(`/api/pacotes/${id}`);
-                if (resp && resp.ok) {
-                    const { data } = await resp.json();
-                    this._preencherForm(data);
+                if (!resp || !resp.ok) {
+                    App.showToast('Erro ao carregar o pacote', 'danger');
+                    return;
                 }
-            } catch (e) { console.error(e); }
-        } else {
-            // Validade padrão: 5 dias
-            const val = new Date(); val.setDate(val.getDate() + 5);
-            document.getElementById('fValidade').value = val.toISOString().slice(0,10);
+                const { data } = await resp.json();
+                this._preencherForm(data);
+            } catch (e) {
+                console.error(e);
+                App.showToast('Erro ao carregar o pacote', 'danger');
+                return;
+            }
+        }
+
+        // Novo pacote ou cópia: a proposta nasce como orçamento com validade padrão de 5 dias
+        if (!id || duplicando) {
+            const set = (elId, v) => { const el = document.getElementById(elId); if (el) el.value = v; };
+            set('fValidade', this._dataLocalISO(5));
+            if (duplicando) set('fStatus', 'orcamento');
         }
 
         this._renderizarServicos();
@@ -398,6 +420,14 @@ const PacotesModule = {
 
         const modal = new bootstrap.Modal(document.getElementById('modalPacote'));
         modal.show();
+    },
+
+    // Data local no formato YYYY-MM-DD. Não usar toISOString(): em UTC-3, depois
+    // das 21h ele devolve o dia seguinte.
+    _dataLocalISO(offsetDias = 0) {
+        const d = new Date();
+        if (offsetDias) d.setDate(d.getDate() + offsetDias);
+        return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
     },
 
     fecharModal() {
@@ -1001,9 +1031,7 @@ const PacotesModule = {
         const dataEmissao = p.createdAt ? this._fmtData(p.createdAt) : this._fmtData(new Date().toISOString());
         const codigo = p.id !== 'preview' ? `#${p.id.slice(0,8).toUpperCase()}` : '#PREVIA';
         // Validade: sempre a data atual (mesmo padrao do relatorio de Cotacao)
-        const hoje = new Date();
-        const hojeStr = `${hoje.getFullYear()}-${String(hoje.getMonth()+1).padStart(2,'0')}-${String(hoje.getDate()).padStart(2,'0')}`;
-        const validadeStr = '   |   Valido ate: ' + this._fmtData(hojeStr);
+        const validadeStr = '   |   Valido ate: ' + this._fmtData(this._dataLocalISO());
         doc.text(`Emissao: ${dataEmissao}   |   Codigo: ${codigo}${validadeStr}`, pw/2, y + 18, { align:'center' });
         y += 30;
 
