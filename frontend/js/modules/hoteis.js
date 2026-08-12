@@ -4,6 +4,7 @@ const HoteisModule = {
     _hoteis: [],
     _clientes: [],
     _editandoId: null,
+    _salvando: false,
 
     init() {
         debugLog('HoteisModule: Inicializado');
@@ -100,7 +101,11 @@ const HoteisModule = {
             <!-- Tabela -->
             <div class="card">
                 <div class="card-body p-0">
-                    <div class="table-responsive">
+                    <!-- Scroll horizontal superior (espelha a largura da tabela) -->
+                    <div id="hoteisScrollTop" style="overflow-x:auto; overflow-y:hidden;">
+                        <div id="hoteisScrollTopInner" style="height:1px;"></div>
+                    </div>
+                    <div class="table-responsive" id="hoteisTableWrapper">
                         <table class="table table-hover mb-0" id="tabelaHoteis">
                             <thead class="table-light">
                                 <tr>
@@ -243,6 +248,39 @@ const HoteisModule = {
         }).join('');
 
         this._atualizarResumo(lista);
+        this._syncScrollTop();
+    },
+
+    // Sincroniza a barra de rolagem superior com a rolagem horizontal da tabela
+    _syncScrollTop() {
+        const top   = document.getElementById('hoteisScrollTop');
+        const inner = document.getElementById('hoteisScrollTopInner');
+        const wrap  = document.getElementById('hoteisTableWrapper');
+        const table = document.getElementById('tabelaHoteis');
+        if (!top || !inner || !wrap || !table) return;
+
+        // Espelha a largura real da tabela na barra superior
+        inner.style.width = table.scrollWidth + 'px';
+
+        if (this._scrollSynced) return; // evita registrar os listeners mais de uma vez
+        this._scrollSynced = true;
+
+        let travado = false;
+        top.addEventListener('scroll', () => {
+            if (travado) return;
+            travado = true;
+            wrap.scrollLeft = top.scrollLeft;
+            travado = false;
+        });
+        wrap.addEventListener('scroll', () => {
+            if (travado) return;
+            travado = true;
+            top.scrollLeft = wrap.scrollLeft;
+            travado = false;
+        });
+        window.addEventListener('resize', () => {
+            if (table) inner.style.width = table.scrollWidth + 'px';
+        });
     },
 
     _atualizarResumo(lista) {
@@ -479,6 +517,10 @@ const HoteisModule = {
     },
 
     async salvar() {
+        // Bloqueia reenvio enquanto a requisição anterior está em voo — sem isso,
+        // um segundo clique durante a latência da rede cria uma reserva duplicada.
+        if (this._salvando) return;
+
         const nomeHotel = document.getElementById('hotelNome')?.value?.trim();
         const checkin = document.getElementById('hotelCheckin')?.value;
         const checkout = document.getElementById('hotelCheckout')?.value;
@@ -507,6 +549,14 @@ const HoteisModule = {
             observacoes:    document.getElementById('hotelObservacoes')?.value?.trim() || null,
         };
 
+        const btn = document.querySelector('#modalHotel .modal-footer .btn-primary');
+        const btnHtml = btn?.innerHTML;
+        this._salvando = true;
+        if (btn) {
+            btn.disabled = true;
+            btn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span> Salvando...';
+        }
+
         try {
             let raw;
             if (this._editandoId) {
@@ -527,6 +577,12 @@ const HoteisModule = {
             }
         } catch (e) {
             App.showToast('Erro ao salvar reserva', 'error');
+        } finally {
+            this._salvando = false;
+            if (btn && btn.isConnected) {
+                btn.disabled = false;
+                btn.innerHTML = btnHtml;
+            }
         }
     },
 
