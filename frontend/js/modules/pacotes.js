@@ -23,6 +23,16 @@ const PacotesModule = {
         cancelado:  { label: 'Cancelado',  cls: 'bg-danger'    },
     },
 
+    // Sugestões clicáveis para o campo Características do quarto (hotel)
+    CARACTERISTICAS_HOTEL: [
+        'Café da manhã incluso', 'Ar-condicionado', 'Wi-Fi grátis', 'Frigobar',
+        'TV a cabo', 'Vista para o mar', 'Varanda', 'Banheira', 'Cofre',
+        'Cama king size', 'Camas separadas', 'Berço disponível',
+        'All inclusive', 'Meia pensão', 'Café da manhã não incluso',
+    ],
+
+    MAX_IMAGENS: 8,   // por serviço
+
     // ── Init / Render ────────────────────────────────────────────────
     init() {},
 
@@ -188,35 +198,7 @@ const PacotesModule = {
                                 </button>`).join('')}
                         </div>
                     </div>
-                    <div class="card-body p-0">
-                        <div class="table-responsive">
-                            <table class="table table-sm mb-0 align-middle" id="tabelaServicos">
-                                <thead class="table-light">
-                                    <tr>
-                                        <th style="width:120px">Tipo</th>
-                                        <th>Descrição</th>
-                                        <th style="width:150px">Fornecedor</th>
-                                        <th style="width:110px">Data Início</th>
-                                        <th style="width:110px">Data Fim</th>
-                                        <th style="width:70px" class="text-center">Qtd</th>
-                                        <th style="width:200px;min-width:200px" class="text-end">Valor Unit.</th>
-                                        <th style="width:200px;min-width:200px" class="text-end">Total</th>
-                                        <th style="width:50px" class="text-center" title="Foto">
-                                            <i class="bi bi-camera text-muted"></i>
-                                        </th>
-                                        <th style="width:40px"></th>
-                                    </tr>
-                                </thead>
-                                <tbody id="tbodyServicos">
-                                    <tr id="trSemServicos">
-                                        <td colspan="10" class="text-center text-muted py-3">
-                                            <i class="bi bi-plus-circle me-2"></i>Clique em um tipo acima para adicionar serviços
-                                        </td>
-                                    </tr>
-                                </tbody>
-                            </table>
-                        </div>
-                    </div>
+                    <div class="card-body bg-body-tertiary" id="listaServicos"></div>
                 </div>
             </div>
 
@@ -476,7 +458,17 @@ const PacotesModule = {
         set('fMarkup',          p.markup != null ? +p.markup : 0);
 
         const servicos = Array.isArray(p.servicos) ? p.servicos : [];
-        this._servicos = servicos.map(s => ({ ...s }));
+        this._servicos = servicos.map(s => this._normalizarServico(s));
+    },
+
+    // Pacotes antigos guardavam uma única foto em `imagem` e não tinham
+    // `caracteristicas`. Converte para o formato atual ao carregar.
+    _normalizarServico(s) {
+        const n = { ...s };
+        if (!Array.isArray(n.imagens)) n.imagens = n.imagem ? [n.imagem] : [];
+        delete n.imagem;
+        if (typeof n.caracteristicas !== 'string') n.caracteristicas = '';
+        return n;
     },
 
     _syncServicosFromDOM() {
@@ -506,6 +498,8 @@ const PacotesModule = {
             if (pessoas !== undefined) s.pessoas = +pessoas || 1;
             const apto = v(`svc_apto_${i}`);
             if (apto !== undefined) s.tipoApto = apto;
+            const carac = v(`svc_carac_${i}`);
+            if (carac !== undefined) s.caracteristicas = carac;
         });
     },
 
@@ -603,7 +597,8 @@ const PacotesModule = {
         this._servicos.push({
             tipo, descricao: '', fornecedor: '',
             dataInicio: '', dataFim: '', quantidade: 1,
-            valorUnit: 0, valorTotal: 0, obs: '', imagem: null,
+            valorUnit: 0, valorTotal: 0, obs: '',
+            caracteristicas: '', imagens: [],
             diarias:  ehHotel ? 1 : 0,
             quartos:  ehHotel ? 1 : 0,
             pessoas:  ehHotel ? 2 : 0,
@@ -635,25 +630,32 @@ const PacotesModule = {
             }
         }
 
-        if (s.tipo === 'hotel') {
-            // Total do hotel = diária × nº de quartos × nº de diárias
-            if (campo !== 'valorTotal') {
-                s.valorTotal = (+s.valorUnit || 0) * (+s.quartos || 1) * (+s.diarias || 0);
-                const totalEl = document.getElementById(`svc_valorTotal_${idx}`);
-                if (totalEl) totalEl.value = this._fmtInput(s.valorTotal);
+        // Só mexe nos valores quando o campo alterado entra na conta. Antes, digitar
+        // na descrição já recalculava o total e apagava um valor definido à mão.
+        const afetaValor = ['quantidade','valorUnit','valorTotal','diarias','quartos','dataInicio','dataFim','tipo'];
+        if (afetaValor.includes(campo)) {
+            if (s.tipo === 'hotel') {
+                // Total do hotel = diária × nº de quartos × nº de diárias
+                if (campo !== 'valorTotal') {
+                    s.valorTotal = (+s.valorUnit || 0) * (+s.quartos || 1) * (+s.diarias || 0);
+                    const totalEl = document.getElementById(`svc_valorTotal_${idx}`);
+                    if (totalEl) totalEl.value = this._fmtInput(s.valorTotal);
+                } else {
+                    // Usuário editou o total manualmente → recalcula a diária implícita
+                    const div = (+s.quartos || 1) * (+s.diarias || 1);
+                    s.valorUnit = div > 0 ? s.valorTotal / div : s.valorTotal;
+                }
             } else {
-                // Usuário editou o total manualmente → recalcula a diária implícita
-                const div = (+s.quartos || 1) * (+s.diarias || 1);
-                s.valorUnit = div > 0 ? s.valorTotal / div : s.valorTotal;
+                if (campo === 'quantidade' || campo === 'valorUnit') {
+                    s.valorTotal = s.quantidade * s.valorUnit;
+                    const totalEl = document.getElementById(`svc_valorTotal_${idx}`);
+                    if (totalEl) totalEl.value = this._fmtInput(s.valorTotal);
+                } else if (campo === 'valorTotal') {
+                    s.valorUnit = s.quantidade > 0 ? s.valorTotal / s.quantidade : 0;
+                }
             }
-        } else {
-            if (campo === 'quantidade' || campo === 'valorUnit') {
-                s.valorTotal = s.quantidade * s.valorUnit;
-                const totalEl = document.getElementById(`svc_valorTotal_${idx}`);
-                if (totalEl) totalEl.value = this._fmtInput(s.valorTotal);
-            } else if (campo === 'valorTotal') {
-                s.valorUnit = s.quantidade > 0 ? s.valorTotal / s.quantidade : 0;
-            }
+            const badge = document.getElementById(`svc_badge_${idx}`);
+            if (badge) badge.textContent = this._fmtMoeda(+s.valorTotal || 0);
         }
 
         // Mudou o tipo → aplica padrões de hotel e re-renderiza (mostra/oculta campos)
@@ -672,163 +674,276 @@ const PacotesModule = {
     },
 
     _renderizarServicos() {
-        const tbody = document.getElementById('tbodyServicos');
-        if (!tbody) return;
-
-        const semEl = document.getElementById('trSemServicos');
+        const box = document.getElementById('listaServicos');
+        if (!box) return;
 
         if (!this._servicos.length) {
-            tbody.innerHTML = `
-                <tr id="trSemServicos">
-                    <td colspan="10" class="text-center text-muted py-3">
-                        <i class="bi bi-plus-circle me-2"></i>Clique em um tipo acima para adicionar serviços
-                    </td>
-                </tr>`;
+            box.innerHTML = `
+                <div class="text-center text-muted py-4">
+                    <i class="bi bi-plus-circle me-2"></i>Clique em um tipo acima para adicionar serviços
+                </div>`;
             return;
         }
 
-        tbody.innerHTML = this._servicos.map((s, i) => {
-            const tipo = this.TIPOS.find(t => t.value === s.tipo) || this.TIPOS[5];
-            return `
-            <tr>
-                <td>
-                    <div class="d-flex align-items-center gap-1">
-                        <i class="bi ${tipo.icon}" style="color:${tipo.cor}"></i>
-                        <select id="svc_tipo_${i}" class="form-select form-select-sm border-0 p-0 bg-transparent"
-                                style="width:90px; font-size:.8rem"
-                                onchange="PacotesModule._onServicoChange(${i},'tipo',this.value)">
-                            ${this.TIPOS.map(t => `<option value="${t.value}" ${s.tipo===t.value?'selected':''}>${t.label}</option>`).join('')}
-                        </select>
-                    </div>
-                </td>
-                <td style="min-width:260px">
-                    <input type="text" id="svc_desc_${i}" class="form-control form-control-sm" value="${s.descricao||''}"
-                           placeholder="Descrição do serviço"
-                           oninput="PacotesModule._onServicoChange(${i},'descricao',this.value)">
-                    ${s.tipo === 'hotel' ? `
-                    <div class="d-flex flex-wrap gap-1 mt-1 align-items-center">
-                        <div class="input-group input-group-sm flex-nowrap" style="width:100px" title="Nº de diárias (calculado pelas datas)">
-                            <span class="input-group-text px-1"><i class="bi bi-moon-stars"></i></span>
-                            <input type="number" id="svc_diarias_${i}" class="form-control text-center px-1" min="0"
-                                   value="${s.diarias||''}" placeholder="diárias"
-                                   onchange="PacotesModule._onServicoChange(${i},'diarias',this.value)">
-                        </div>
-                        <div class="input-group input-group-sm flex-nowrap" style="width:92px" title="Nº de quartos">
-                            <span class="input-group-text px-1"><i class="bi bi-door-closed"></i></span>
-                            <input type="number" id="svc_quartos_${i}" class="form-control text-center px-1" min="1"
-                                   value="${s.quartos||1}" placeholder="quartos"
-                                   onchange="PacotesModule._onServicoChange(${i},'quartos',this.value)">
-                        </div>
-                        <div class="input-group input-group-sm flex-nowrap" style="width:92px" title="Nº de pessoas">
-                            <span class="input-group-text px-1"><i class="bi bi-people"></i></span>
-                            <input type="number" id="svc_pessoas_${i}" class="form-control text-center px-1" min="1"
-                                   value="${s.pessoas||1}" placeholder="pessoas"
-                                   onchange="PacotesModule._onServicoChange(${i},'pessoas',this.value)">
-                        </div>
-                        <select id="svc_apto_${i}" class="form-select form-select-sm" style="width:150px"
-                                title="Tipo de apartamento"
-                                onchange="PacotesModule._onServicoChange(${i},'tipoApto',this.value)">
-                            ${['single','duplo','triplo','quadruplo','quintuplo'].map(a =>
-                                `<option value="${a}" ${s.tipoApto===a?'selected':''}>${this._labelApto(a)}</option>`).join('')}
-                        </select>
-                    </div>` : ''}
-                </td>
-                <td>
-                    <input type="text" id="svc_forn_${i}" class="form-control form-control-sm" value="${s.fornecedor||''}"
-                           placeholder="Fornecedor"
+        box.innerHTML = this._servicos.map((s, i) => this._htmlCardServico(s, i)).join('');
+    },
+
+    _htmlCardServico(s, i) {
+        const tipo    = this.TIPOS.find(t => t.value === s.tipo) || this.TIPOS[5];
+        const ehHotel = s.tipo === 'hotel';
+        const esc     = v => this._esc(v);
+        const imagens = Array.isArray(s.imagens) ? s.imagens : [];
+
+        // Características já marcadas — usado para destacar as sugestões ativas
+        const marcadas = (s.caracteristicas || '').split('\n').map(l => l.trim().toLowerCase()).filter(Boolean);
+
+        return `
+        <div class="card mb-3 shadow-sm border-0" style="border-left:4px solid ${tipo.cor} !important">
+            <!-- Cabeçalho: tipo + descrição + total + remover -->
+            <div class="card-header bg-white d-flex align-items-center gap-2 py-2 flex-wrap">
+                <i class="bi ${tipo.icon} fs-5" style="color:${tipo.cor}"></i>
+                <select id="svc_tipo_${i}" class="form-select form-select-sm" style="width:120px"
+                        onchange="PacotesModule._onServicoChange(${i},'tipo',this.value)">
+                    ${this.TIPOS.map(t => `<option value="${t.value}" ${s.tipo===t.value?'selected':''}>${t.label}</option>`).join('')}
+                </select>
+                <input type="text" id="svc_desc_${i}" class="form-control form-control-sm flex-grow-1"
+                       style="min-width:200px" value="${esc(s.descricao)}"
+                       placeholder="${ehHotel ? 'Nome do hotel' : 'Descrição do serviço'}"
+                       oninput="PacotesModule._onServicoChange(${i},'descricao',this.value)">
+                <span class="badge bg-primary bg-opacity-10 text-primary fw-semibold"
+                      id="svc_badge_${i}">${this._fmtMoeda(+s.valorTotal||0)}</span>
+                <button class="btn btn-sm btn-outline-danger" title="Remover serviço"
+                        onclick="PacotesModule.removerServico(${i})">
+                    <i class="bi bi-trash"></i>
+                </button>
+            </div>
+
+            <div class="card-body row g-3">
+                <!-- Fornecedor e datas -->
+                <div class="col-md-4">
+                    <label class="form-label small text-muted mb-1">Fornecedor</label>
+                    <input type="text" id="svc_forn_${i}" class="form-control form-control-sm"
+                           value="${esc(s.fornecedor)}" placeholder="Operadora, hotel, receptivo..."
                            oninput="PacotesModule._onServicoChange(${i},'fornecedor',this.value)">
-                </td>
-                <td>
-                    <input type="date" id="svc_dtI_${i}" class="form-control form-control-sm" value="${s.dataInicio||''}"
+                </div>
+                <div class="col-md-2 col-6">
+                    <label class="form-label small text-muted mb-1">${ehHotel ? 'Check-in' : 'Início'}</label>
+                    <input type="date" id="svc_dtI_${i}" class="form-control form-control-sm" value="${esc(s.dataInicio).slice(0,10)}"
                            onchange="PacotesModule._onServicoChange(${i},'dataInicio',this.value)">
-                </td>
-                <td>
-                    <input type="date" id="svc_dtF_${i}" class="form-control form-control-sm" value="${s.dataFim||''}"
+                </div>
+                <div class="col-md-2 col-6">
+                    <label class="form-label small text-muted mb-1">${ehHotel ? 'Check-out' : 'Fim'}</label>
+                    <input type="date" id="svc_dtF_${i}" class="form-control form-control-sm" value="${esc(s.dataFim).slice(0,10)}"
                            onchange="PacotesModule._onServicoChange(${i},'dataFim',this.value)">
-                </td>
-                <td>
-                    ${s.tipo === 'hotel'
-                        ? `<span class="text-muted small" title="Para hotel use os campos Quartos e Diárias">—</span>`
-                        : `<input type="number" id="svc_qtd_${i}" class="form-control form-control-sm text-center" value="${s.quantidade||1}"
-                                 min="1" style="width:60px"
-                                 onchange="PacotesModule._onServicoChange(${i},'quantidade',this.value)">`}
-                </td>
-                <td>
+                </div>
+                <div class="col-md-2 col-6">
+                    <label class="form-label small text-muted mb-1">${ehHotel ? 'Valor da diária' : 'Valor unitário'}</label>
                     <div class="input-group input-group-sm">
                         <span class="input-group-text px-1">R$</span>
                         <input type="text" id="svc_vUnit_${i}" class="form-control text-end" inputmode="numeric"
-                               style="min-width:130px"
                                value="${this._fmtInput(+s.valorUnit||0)}"
                                oninput="PacotesModule._mascaraMoeda(this)"
                                onblur="PacotesModule._onServicoChange(${i},'valorUnit',this.value)">
                     </div>
-                </td>
-                <td>
+                </div>
+                <div class="col-md-2 col-6">
+                    <label class="form-label small text-muted mb-1">Total</label>
                     <div class="input-group input-group-sm">
                         <span class="input-group-text px-1">R$</span>
                         <input type="text" id="svc_valorTotal_${i}" class="form-control text-end fw-semibold"
-                               inputmode="numeric" style="min-width:130px"
-                               value="${this._fmtInput(+s.valorTotal||0)}"
+                               inputmode="numeric" value="${this._fmtInput(+s.valorTotal||0)}"
                                oninput="PacotesModule._mascaraMoeda(this)"
                                onblur="PacotesModule._onServicoChange(${i},'valorTotal',this.value)">
                     </div>
-                </td>
-                <td class="text-center">
-                    <input type="file" id="svc_img_file_${i}" accept="image/*" class="d-none"
-                           onchange="PacotesModule._onImagemServico(${i}, this)">
-                    ${s.imagem
-                        ? `<div class="position-relative d-inline-block">
-                               <img src="${s.imagem}" style="width:38px;height:38px;object-fit:cover;border-radius:5px;cursor:pointer;border:1px solid #dee2e6"
-                                    onclick="PacotesModule._triggerUploadImagem(${i})" title="Trocar imagem">
-                               <button class="btn btn-danger p-0 position-absolute"
-                                       style="top:-5px;right:-5px;width:15px;height:15px;font-size:9px;line-height:14px;border-radius:50%"
-                                       onclick="PacotesModule._removerImagemServico(${i})" title="Remover foto">×</button>
-                           </div>`
-                        : `<button class="btn btn-sm btn-outline-secondary p-1" style="line-height:1"
-                                   title="Adicionar foto" onclick="PacotesModule._triggerUploadImagem(${i})">
-                               <i class="bi bi-camera"></i>
-                           </button>`
-                    }
-                </td>
-                <td class="text-center">
-                    <button class="btn btn-sm btn-outline-danger p-1" style="line-height:1"
-                            onclick="PacotesModule.removerServico(${i})" title="Remover">
-                        <i class="bi bi-x-lg"></i>
-                    </button>
-                </td>
-            </tr>`;
-        }).join('');
+                </div>
+
+                <!-- Bloco do quarto (hotel) ou quantidade (demais tipos) -->
+                ${ehHotel ? `
+                <div class="col-12">
+                    <div class="row g-2 bg-warning bg-opacity-10 rounded p-2 mx-0">
+                        <div class="col-md-2 col-6">
+                            <label class="form-label small text-muted mb-1">
+                                <i class="bi bi-moon-stars me-1"></i>Diárias
+                            </label>
+                            <input type="number" id="svc_diarias_${i}" class="form-control form-control-sm text-center"
+                                   min="0" value="${s.diarias||''}"
+                                   onchange="PacotesModule._onServicoChange(${i},'diarias',this.value)">
+                        </div>
+                        <div class="col-md-2 col-6">
+                            <label class="form-label small text-muted mb-1">
+                                <i class="bi bi-door-closed me-1"></i>Quartos
+                            </label>
+                            <input type="number" id="svc_quartos_${i}" class="form-control form-control-sm text-center"
+                                   min="1" value="${s.quartos||1}"
+                                   onchange="PacotesModule._onServicoChange(${i},'quartos',this.value)">
+                        </div>
+                        <div class="col-md-2 col-6">
+                            <label class="form-label small text-muted mb-1">
+                                <i class="bi bi-people me-1"></i>Pessoas
+                            </label>
+                            <input type="number" id="svc_pessoas_${i}" class="form-control form-control-sm text-center"
+                                   min="1" value="${s.pessoas||1}"
+                                   onchange="PacotesModule._onServicoChange(${i},'pessoas',this.value)">
+                        </div>
+                        <div class="col-md-3 col-6">
+                            <label class="form-label small text-muted mb-1">Tipo de apartamento</label>
+                            <select id="svc_apto_${i}" class="form-select form-select-sm"
+                                    onchange="PacotesModule._onServicoChange(${i},'tipoApto',this.value)">
+                                ${['single','duplo','triplo','quadruplo','quintuplo'].map(a =>
+                                    `<option value="${a}" ${s.tipoApto===a?'selected':''}>${this._labelApto(a)}</option>`).join('')}
+                            </select>
+                        </div>
+                        <div class="col-md-3 col-12 d-flex align-items-end">
+                            <small class="text-muted">Total = diária × quartos × diárias</small>
+                        </div>
+                    </div>
+                </div>` : `
+                <div class="col-md-2 col-6">
+                    <label class="form-label small text-muted mb-1">Quantidade</label>
+                    <input type="number" id="svc_qtd_${i}" class="form-control form-control-sm text-center"
+                           min="1" value="${s.quantidade||1}"
+                           onchange="PacotesModule._onServicoChange(${i},'quantidade',this.value)">
+                </div>`}
+
+                <!-- Características -->
+                <div class="col-12">
+                    <label class="form-label small text-muted mb-1">
+                        <i class="bi bi-stars me-1"></i>${ehHotel ? 'Características do quarto' : 'Detalhes / o que está incluso'}
+                        <span class="ms-1">(uma por linha — sai no PDF)</span>
+                    </label>
+                    ${ehHotel ? `
+                    <div class="d-flex flex-wrap gap-1 mb-2">
+                        ${this.CARACTERISTICAS_HOTEL.map(c => {
+                            const ativo = marcadas.includes(c.toLowerCase());
+                            return `<button class="btn btn-sm ${ativo ? 'btn-warning' : 'btn-outline-secondary'} py-0 px-2"
+                                            style="font-size:.72rem"
+                                            onclick="PacotesModule._toggleCaracteristica(${i}, '${esc(c).replace(/'/g, "\\'")}')">
+                                        ${ativo ? '<i class="bi bi-check2 me-1"></i>' : ''}${c}
+                                    </button>`;
+                        }).join('')}
+                    </div>` : ''}
+                    <textarea id="svc_carac_${i}" class="form-control form-control-sm" rows="3"
+                              placeholder="${ehHotel
+                                    ? 'Ex.:\nQuarto duplo standard com vista para o mar\nCafé da manhã incluso\nAr-condicionado e frigobar'
+                                    : 'Ex.:\nTranslado privativo aeroporto / hotel\nGuia acompanhante em português'}"
+                              oninput="PacotesModule._onServicoChange(${i},'caracteristicas',this.value)">${esc(s.caracteristicas)}</textarea>
+                </div>
+
+                <!-- Fotos -->
+                <div class="col-12">
+                    <label class="form-label small text-muted mb-1">
+                        <i class="bi bi-images me-1"></i>Fotos
+                        <span class="ms-1">(${imagens.length}/${this.MAX_IMAGENS})</span>
+                    </label>
+                    <input type="file" id="svc_img_file_${i}" accept="image/*" multiple class="d-none"
+                           onchange="PacotesModule._onImagensServico(${i}, this)">
+                    <div class="d-flex flex-wrap gap-2 align-items-center">
+                        ${imagens.map((img, j) => `
+                            <div class="position-relative">
+                                <img src="${img}" alt="Foto ${j+1}"
+                                     style="width:88px;height:66px;object-fit:cover;border-radius:6px;border:1px solid #dee2e6">
+                                <button class="btn btn-danger p-0 position-absolute"
+                                        style="top:-6px;right:-6px;width:18px;height:18px;font-size:10px;line-height:16px;border-radius:50%"
+                                        onclick="PacotesModule._removerImagem(${i},${j})" title="Remover foto">&times;</button>
+                            </div>`).join('')}
+                        ${imagens.length < this.MAX_IMAGENS ? `
+                            <button class="btn btn-outline-secondary d-flex flex-column align-items-center justify-content-center"
+                                    style="width:88px;height:66px" title="Adicionar fotos"
+                                    onclick="PacotesModule._triggerUploadImagem(${i})">
+                                <i class="bi bi-camera"></i>
+                                <small style="font-size:.65rem">Adicionar</small>
+                            </button>` : ''}
+                    </div>
+                </div>
+            </div>
+        </div>`;
     },
 
-    // ── Imagem por serviço ───────────────────────────────────────────
+    // ── Características ──────────────────────────────────────────────
+
+    _toggleCaracteristica(idx, texto) {
+        const s = this._servicos[idx];
+        if (!s) return;
+        this._syncServicosFromDOM();   // não perde o que já foi digitado nos outros campos
+
+        const linhas = (s.caracteristicas || '').split('\n').map(l => l.trim()).filter(Boolean);
+        const alvo   = texto.toLowerCase();
+        s.caracteristicas = linhas.some(l => l.toLowerCase() === alvo)
+            ? linhas.filter(l => l.toLowerCase() !== alvo).join('\n')
+            : [...linhas, texto].join('\n');
+
+        this._renderizarServicos();
+    },
+
+    // ── Imagens por serviço ──────────────────────────────────────────
 
     _triggerUploadImagem(idx) {
         document.getElementById(`svc_img_file_${idx}`)?.click();
     },
 
-    _onImagemServico(idx, input) {
-        const file = input.files[0];
-        if (!file) return;
-        if (file.size > 1024 * 1024) {
-            App.showToast('Imagem muito grande. Máximo 1MB.', 'warning');
-            input.value = '';
+    async _onImagensServico(idx, input) {
+        const s = this._servicos[idx];
+        const arquivos = Array.from(input.files || []);
+        input.value = '';   // permite reescolher o mesmo arquivo depois
+        if (!s || !arquivos.length) return;
+
+        this._syncServicosFromDOM();
+        if (!Array.isArray(s.imagens)) s.imagens = [];
+
+        const espaco = this.MAX_IMAGENS - s.imagens.length;
+        if (espaco <= 0) {
+            App.showToast(`Máximo de ${this.MAX_IMAGENS} fotos por serviço`, 'warning');
             return;
         }
-        const reader = new FileReader();
-        reader.onload = (e) => {
-            if (this._servicos[idx]) {
-                this._servicos[idx].imagem = e.target.result;
-                this._renderizarServicos();
+        if (arquivos.length > espaco) {
+            App.showToast(`Cabem mais ${espaco} foto(s) neste serviço — as demais foram ignoradas`, 'warning');
+        }
+
+        for (const arq of arquivos.slice(0, espaco)) {
+            if (!arq.type.startsWith('image/')) continue;
+            try {
+                s.imagens.push(await this._redimensionarImagem(arq));
+            } catch (e) {
+                App.showToast(`Não foi possível ler "${arq.name}"`, 'danger');
             }
-        };
-        reader.readAsDataURL(file);
+        }
+        this._renderizarServicos();
     },
 
-    _removerImagemServico(idx) {
-        if (this._servicos[idx]) {
-            this._servicos[idx].imagem = null;
-            this._renderizarServicos();
-        }
+    _removerImagem(idx, imgIdx) {
+        const s = this._servicos[idx];
+        if (!s || !Array.isArray(s.imagens)) return;
+        this._syncServicosFromDOM();
+        s.imagens.splice(imgIdx, 1);
+        this._renderizarServicos();
+    },
+
+    // As fotos vão em base64 dentro do JSONB do pacote, então uma imagem de 4MB
+    // vinda do celular viraria ~5,5MB no banco. Reduz antes de guardar.
+    _redimensionarImagem(file, maxLado = 1280, qualidade = 0.75) {
+        return new Promise((resolve, reject) => {
+            const reader = new FileReader();
+            reader.onerror = () => reject(new Error('falha ao ler o arquivo'));
+            reader.onload  = () => {
+                const img = new Image();
+                img.onerror = () => reject(new Error('formato de imagem inválido'));
+                img.onload  = () => {
+                    const escala = Math.min(1, maxLado / Math.max(img.width, img.height));
+                    const w = Math.round(img.width  * escala);
+                    const h = Math.round(img.height * escala);
+                    const canvas = document.createElement('canvas');
+                    canvas.width = w; canvas.height = h;
+                    const ctx = canvas.getContext('2d');
+                    // Fundo branco: PNG com transparência viraria preto no JPEG
+                    ctx.fillStyle = '#ffffff';
+                    ctx.fillRect(0, 0, w, h);
+                    ctx.drawImage(img, 0, 0, w, h);
+                    resolve(canvas.toDataURL('image/jpeg', qualidade));
+                };
+                img.src = reader.result;
+            };
+            reader.readAsDataURL(file);
+        });
     },
 
     // ── Cálculos ─────────────────────────────────────────────────────
@@ -1108,21 +1223,19 @@ const PacotesModule = {
             doc.text('Total',      mg + cw - 2, y + 5, { align:'right' });
             y += 7;
 
+            // Datas no formato dd/mm/aa para economizar espaço
+            const fmtCurta = (d) => {
+                if (!d) return '—';
+                const iso = (d instanceof Date) ? d.toISOString() : String(d);
+                const s2 = iso.slice(0, 10).split('-');
+                return (s2.length === 3 && s2[0].length === 4) ? `${s2[2]}/${s2[1]}/${s2[0].slice(2)}` : '—';
+            };
+
             let rowBg = false;
             for (const s of servicos) {
-                const rowH = 7;
-                _checkPage(rowH + 2);
-                if (rowBg) { doc.setFillColor(245, 248, 255); doc.rect(mg, y, cw, rowH, 'F'); }
-                rowBg = !rowBg;
-
                 const tInfo = this.TIPOS.find(t => t.value === s.tipo) || { label: s.tipo };
-                doc.setFont('helvetica','normal'); doc.setFontSize(8); doc.setTextColor(40,40,40);
-                cx = mg + 2;
 
-                // Tipo
-                doc.text((tInfo.label||'').substring(0,9), cx, y + 5); cx += cols.tipo;
-
-                // Descrição — clipa para caber na coluna. Hotel inclui diárias e tipo de apto.
+                // Descrição. Hotel inclui diárias, quartos, pax e tipo de apto.
                 let descTxt = s.descricao || '';
                 if (s.tipo === 'hotel') {
                     const extras = [];
@@ -1132,20 +1245,40 @@ const PacotesModule = {
                     if (s.tipoApto)     extras.push(this._labelApto(s.tipoApto));
                     if (extras.length)  descTxt = (descTxt ? descTxt + ' — ' : '') + extras.join(', ');
                 }
-                const descFit = doc.splitTextToSize(descTxt, cols.desc - 2);
-                doc.text(descFit[0] || '', cx, y + 5); cx += cols.desc;
+
+                // A linha cresce conforme a descrição e as características quebram
+                const descLinhas  = doc.splitTextToSize(descTxt || '—', cols.desc - 2);
+                const caracLinhas = [];
+                (s.caracteristicas || '').split('\n').map(l => l.trim()).filter(Boolean)
+                    .forEach(item => doc.splitTextToSize('• ' + item, cols.desc - 6)
+                        .forEach(l => caracLinhas.push(l)));
+
+                const rowH = Math.max(7, 3 + (descLinhas.length + caracLinhas.length) * 4);
+                _checkPage(rowH + 2);
+
+                if (rowBg) { doc.setFillColor(245, 248, 255); doc.rect(mg, y, cw, rowH, 'F'); }
+                rowBg = !rowBg;
+
+                doc.setFont('helvetica','normal'); doc.setFontSize(8); doc.setTextColor(40,40,40);
+                cx = mg + 2;
+
+                // Tipo
+                doc.text((tInfo.label||'').substring(0,9), cx, y + 5); cx += cols.tipo;
+
+                // Descrição + características, uma por linha
+                let ty = y + 5;
+                descLinhas.forEach(l => { doc.text(l, cx, ty); ty += 4; });
+                if (caracLinhas.length) {
+                    doc.setFontSize(7); doc.setTextColor(95, 105, 120);
+                    caracLinhas.forEach(l => { doc.text(l, cx + 3, ty); ty += 4; });
+                    doc.setFontSize(8); doc.setTextColor(40,40,40);
+                }
+                cx += cols.desc;
 
                 // Fornecedor — clipa
                 const fornFit = doc.splitTextToSize(s.fornecedor||'', cols.forn - 2);
                 doc.text(fornFit[0] || '', cx, y + 5); cx += cols.forn;
 
-                // Datas no formato dd/mm/aa para economizar espaço
-                const fmtCurta = (d) => {
-                    if (!d) return '—';
-                    const iso = (d instanceof Date) ? d.toISOString() : String(d);
-                    const s2 = iso.slice(0, 10).split('-');
-                    return (s2.length === 3 && s2[0].length === 4) ? `${s2[2]}/${s2[1]}/${s2[0].slice(2)}` : '—';
-                };
                 doc.text(fmtCurta(s.dataInicio), cx, y + 5); cx += cols.dtI;
                 doc.text(fmtCurta(s.dataFim),    cx, y + 5); cx += cols.dtF;
 
@@ -1160,8 +1293,14 @@ const PacotesModule = {
             y += 6;
 
             // ── Galeria de imagens ──
-            const comImagem = servicos.filter(s => s.imagem);
-            if (comImagem.length) {
+            // Cada serviço pode ter várias fotos; `imagem` é o formato antigo.
+            const fotos = [];
+            servicos.forEach(s => {
+                const lista = Array.isArray(s.imagens) ? s.imagens : (s.imagem ? [s.imagem] : []);
+                lista.forEach(img => fotos.push({ img, servico: s }));
+            });
+
+            if (fotos.length) {
                 _checkPage(20);
                 doc.setFont('helvetica','bold'); doc.setFontSize(10); doc.setTextColor(26, 54, 93);
                 doc.text('FOTOS DO PACOTE', mg, y + 5);
@@ -1173,7 +1312,7 @@ const PacotesModule = {
                 const imgH = imgW * 0.62;      // proporção ~16:10
 
                 let col = 0;
-                for (const s of comImagem) {
+                for (const { img, servico } of fotos) {
                     _checkPage(imgH + 14);
                     const x = mg + col * (imgW + 6);
 
@@ -1184,13 +1323,13 @@ const PacotesModule = {
                     doc.roundedRect(x, y, imgW, imgH + 10, 3, 3, 'F');
 
                     try {
-                        doc.addImage(s.imagem, x, y, imgW, imgH);
+                        doc.addImage(img, x, y, imgW, imgH);
                     } catch (_) {}
 
                     // Legenda
-                    const tInfo = this.TIPOS.find(t => t.value === s.tipo) || { label: s.tipo };
+                    const tInfo = this.TIPOS.find(t => t.value === servico.tipo) || { label: servico.tipo };
                     doc.setFont('helvetica','bold'); doc.setFontSize(8); doc.setTextColor(40, 40, 40);
-                    const legenda = `${tInfo.label}${s.descricao ? ' — ' + s.descricao.substring(0, 28) : ''}`;
+                    const legenda = `${tInfo.label}${servico.descricao ? ' — ' + servico.descricao.substring(0, 28) : ''}`;
                     doc.text(legenda, x + 3, y + imgH + 7);
 
                     col++;
@@ -1281,6 +1420,14 @@ const PacotesModule = {
 
     _fmtMoeda(v) {
         return (+v||0).toLocaleString('pt-BR', { style:'currency', currency:'BRL' });
+    },
+
+    // Escapa texto do usuário antes de interpolar em atributos/HTML — sem isso
+    // uma descrição com aspas quebra o value="" do input.
+    _esc(v) {
+        return String(v ?? '')
+            .replace(/&/g, '&amp;').replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
     },
 
     _fmtData(d) {
