@@ -1000,7 +1000,10 @@ const PacotesModule = {
         doc.setFont('helvetica','normal'); doc.setFontSize(9); doc.setTextColor(80,80,80);
         const dataEmissao = p.createdAt ? this._fmtData(p.createdAt) : this._fmtData(new Date().toISOString());
         const codigo = p.id !== 'preview' ? `#${p.id.slice(0,8).toUpperCase()}` : '#PREVIA';
-        const validadeStr = p.validade ? '   |   Valido ate: ' + this._fmtData(p.validade) : '';
+        // Validade: sempre a data atual (mesmo padrao do relatorio de Cotacao)
+        const hoje = new Date();
+        const hojeStr = `${hoje.getFullYear()}-${String(hoje.getMonth()+1).padStart(2,'0')}-${String(hoje.getDate()).padStart(2,'0')}`;
+        const validadeStr = '   |   Valido ate: ' + this._fmtData(hojeStr);
         doc.text(`Emissao: ${dataEmissao}   |   Codigo: ${codigo}${validadeStr}`, pw/2, y + 18, { align:'center' });
         y += 30;
 
