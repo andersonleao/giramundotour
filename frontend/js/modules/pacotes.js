@@ -1292,51 +1292,55 @@ const PacotesModule = {
             }
             y += 6;
 
-            // ── Galeria de imagens ──
+            // ── Fotos por serviço ──
             // Cada serviço pode ter várias fotos; `imagem` é o formato antigo.
-            const fotos = [];
-            servicos.forEach(s => {
-                const lista = Array.isArray(s.imagens) ? s.imagens : (s.imagem ? [s.imagem] : []);
-                lista.forEach(img => fotos.push({ img, servico: s }));
-            });
+            const servicosComFotos = servicos
+                .map(s => ({ servico: s, lista: Array.isArray(s.imagens) ? s.imagens : (s.imagem ? [s.imagem] : []) }))
+                .filter(sf => sf.lista.length);
 
-            if (fotos.length) {
-                _checkPage(20);
-                doc.setFont('helvetica','bold'); doc.setFontSize(10); doc.setTextColor(26, 54, 93);
-                doc.text('FOTOS DO PACOTE', mg, y + 5);
-                doc.setDrawColor(26, 54, 93); doc.setLineWidth(0.3);
-                doc.line(mg + 40, y + 3, pw - mg, y + 3);
-                y += 10;
+            if (servicosComFotos.length) {
+                const gap  = 6;
+                const pad  = 2.5;
+                const cardW = (cw - gap) / 2;   // 2 colunas com gap
+                const imgW  = cardW - pad * 2;
+                const imgH  = imgW * 0.62;        // proporção ~16:10
+                const cardH = imgH + pad * 2;
 
-                const imgW = (cw - 6) / 2;   // 2 colunas com gap
-                const imgH = imgW * 0.62;      // proporção ~16:10
+                for (const { servico, lista } of servicosComFotos) {
+                    _checkPage(cardH + 12);
 
-                let col = 0;
-                for (const { img, servico } of fotos) {
-                    _checkPage(imgH + 14);
-                    const x = mg + col * (imgW + 6);
-
-                    // Sombra / borda
-                    doc.setFillColor(220, 230, 245);
-                    doc.roundedRect(x + 1, y + 1, imgW, imgH + 10, 3, 3, 'F');
-                    doc.setFillColor(255, 255, 255);
-                    doc.roundedRect(x, y, imgW, imgH + 10, 3, 3, 'F');
-
-                    try {
-                        doc.addImage(img, x, y, imgW, imgH);
-                    } catch (_) {}
-
-                    // Legenda
                     const tInfo = this.TIPOS.find(t => t.value === servico.tipo) || { label: servico.tipo };
-                    doc.setFont('helvetica','bold'); doc.setFontSize(8); doc.setTextColor(40, 40, 40);
-                    const legenda = `${tInfo.label}${servico.descricao ? ' — ' + servico.descricao.substring(0, 28) : ''}`;
-                    doc.text(legenda, x + 3, y + imgH + 7);
+                    const titulo = `${tInfo.label}${servico.descricao ? ' — ' + servico.descricao.substring(0, 45) : ''}`;
 
-                    col++;
-                    if (col === 2) { col = 0; y += imgH + 14; }
+                    doc.setFont('helvetica','bold'); doc.setFontSize(9.5); doc.setTextColor(26, 54, 93);
+                    doc.text(titulo.toUpperCase(), mg, y + 4);
+                    doc.setDrawColor(26, 54, 93); doc.setLineWidth(0.25);
+                    doc.line(mg, y + 6.5, mg + cw, y + 6.5);
+                    y += 11;
+
+                    let col = 0;
+                    for (const img of lista) {
+                        _checkPage(cardH + 6);
+                        const x = mg + col * (cardW + gap);
+
+                        // Sombra / moldura
+                        doc.setFillColor(220, 230, 245);
+                        doc.roundedRect(x + 1, y + 1, cardW, cardH, 2.5, 2.5, 'F');
+                        doc.setFillColor(255, 255, 255);
+                        doc.roundedRect(x, y, cardW, cardH, 2.5, 2.5, 'F');
+                        doc.setDrawColor(210, 220, 240); doc.setLineWidth(0.2);
+                        doc.roundedRect(x, y, cardW, cardH, 2.5, 2.5, 'S');
+
+                        try {
+                            doc.addImage(img, x + pad, y + pad, imgW, imgH);
+                        } catch (_) {}
+
+                        col++;
+                        if (col === 2) { col = 0; y += cardH + gap; }
+                    }
+                    if (col === 1) y += cardH + gap;
+                    y += 5;
                 }
-                if (col === 1) y += imgH + 14;
-                y += 4;
             }
         }
 
