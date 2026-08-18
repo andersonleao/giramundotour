@@ -1223,12 +1223,12 @@ const PacotesModule = {
             doc.text('Total',      mg + cw - 2, y + 5, { align:'right' });
             y += 7;
 
-            // Datas no formato dd/mm/aa para economizar espaço
+            // Datas no formato dd/mm/yyyy
             const fmtCurta = (d) => {
                 if (!d) return '—';
                 const iso = (d instanceof Date) ? d.toISOString() : String(d);
                 const s2 = iso.slice(0, 10).split('-');
-                return (s2.length === 3 && s2[0].length === 4) ? `${s2[2]}/${s2[1]}/${s2[0].slice(2)}` : '—';
+                return (s2.length === 3 && s2[0].length === 4) ? `${s2[2]}/${s2[1]}/${s2[0]}` : '—';
             };
 
             let rowBg = false;
@@ -1246,14 +1246,16 @@ const PacotesModule = {
                     if (extras.length)  descTxt = (descTxt ? descTxt + ' — ' : '') + extras.join(', ');
                 }
 
-                // A linha cresce conforme a descrição e as características quebram
+                // A linha cresce conforme descrição, características e fornecedor quebram
                 const descLinhas = doc.splitTextToSize(descTxt || '—', cols.desc - 2);
                 const caracItens  = (s.caracteristicas || '').split('\n').map(l => l.trim()).filter(Boolean);
                 const caracLinhas = caracItens.length
                     ? doc.splitTextToSize(caracItens.join('   •   '), cols.desc - 3)
                     : [];
+                const fornLinhas = doc.splitTextToSize(s.fornecedor || '—', cols.forn - 2);
 
-                const rowH = Math.max(7, 3 + (descLinhas.length + caracLinhas.length) * 4);
+                const linhasColDesc = descLinhas.length + caracLinhas.length;
+                const rowH = Math.max(7, 3 + Math.max(linhasColDesc, fornLinhas.length) * 4);
                 _checkPage(rowH + 2);
 
                 if (rowBg) { doc.setFillColor(245, 248, 255); doc.rect(mg, y, cw, rowH, 'F'); }
@@ -1275,9 +1277,10 @@ const PacotesModule = {
                 }
                 cx += cols.desc;
 
-                // Fornecedor — clipa
-                const fornFit = doc.splitTextToSize(s.fornecedor||'', cols.forn - 2);
-                doc.text(fornFit[0] || '', cx, y + 5); cx += cols.forn;
+                // Fornecedor — quebra linha em vez de cortar
+                let fy = y + 5;
+                fornLinhas.forEach(l => { doc.text(l, cx, fy); fy += 4; });
+                cx += cols.forn;
 
                 doc.text(fmtCurta(s.dataInicio), cx, y + 5); cx += cols.dtI;
                 doc.text(fmtCurta(s.dataFim),    cx, y + 5); cx += cols.dtF;
