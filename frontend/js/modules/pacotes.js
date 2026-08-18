@@ -1247,11 +1247,11 @@ const PacotesModule = {
                 }
 
                 // A linha cresce conforme a descrição e as características quebram
-                const descLinhas  = doc.splitTextToSize(descTxt || '—', cols.desc - 2);
-                const caracLinhas = [];
-                (s.caracteristicas || '').split('\n').map(l => l.trim()).filter(Boolean)
-                    .forEach(item => doc.splitTextToSize('• ' + item, cols.desc - 6)
-                        .forEach(l => caracLinhas.push(l)));
+                const descLinhas = doc.splitTextToSize(descTxt || '—', cols.desc - 2);
+                const caracItens  = (s.caracteristicas || '').split('\n').map(l => l.trim()).filter(Boolean);
+                const caracLinhas = caracItens.length
+                    ? doc.splitTextToSize(caracItens.join('   •   '), cols.desc - 3)
+                    : [];
 
                 const rowH = Math.max(7, 3 + (descLinhas.length + caracLinhas.length) * 4);
                 _checkPage(rowH + 2);
@@ -1265,12 +1265,12 @@ const PacotesModule = {
                 // Tipo
                 doc.text((tInfo.label||'').substring(0,9), cx, y + 5); cx += cols.tipo;
 
-                // Descrição + características, uma por linha
+                // Descrição, seguida das características alinhadas na horizontal
                 let ty = y + 5;
                 descLinhas.forEach(l => { doc.text(l, cx, ty); ty += 4; });
                 if (caracLinhas.length) {
                     doc.setFontSize(7); doc.setTextColor(95, 105, 120);
-                    caracLinhas.forEach(l => { doc.text(l, cx + 3, ty); ty += 4; });
+                    caracLinhas.forEach(l => { doc.text(l, cx, ty); ty += 4; });
                     doc.setFontSize(8); doc.setTextColor(40,40,40);
                 }
                 cx += cols.desc;
