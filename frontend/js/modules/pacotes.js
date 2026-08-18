@@ -1199,6 +1199,34 @@ const PacotesModule = {
         doc.setFont('helvetica','normal'); doc.setFontSize(9); doc.setTextColor(40,40,40);
         doc.text(linhasPax.join('  |  '), mg, y); y += 8;
 
+        // ── Resumo de valores (sempre na 1ª página) ──
+        _checkPage(42);
+        const bW = 80; const bX = pw - mg - bW;
+
+        doc.setFillColor(240, 247, 255);
+        doc.roundedRect(bX, y, bW, p.markup > 0 ? 28 : 18, 2, 2, 'F');
+        doc.setDrawColor(26, 54, 93); doc.setLineWidth(0.3);
+        doc.roundedRect(bX, y, bW, p.markup > 0 ? 28 : 18, 2, 2, 'S');
+
+        doc.setFont('helvetica','normal'); doc.setFontSize(9); doc.setTextColor(60,60,60);
+        let by = y + 7;
+        doc.text('Subtotal:', bX + 4, by);
+        doc.text(this._fmtMoeda(+p.subtotal||0), bX + bW - 4, by, { align:'right' });
+
+        if (p.markup > 0) {
+            by += 6;
+            doc.text(`Markup (${p.markup}%):`, bX + 4, by);
+            doc.text(this._fmtMoeda((+p.subtotal||0) * (+p.markup||0) / 100), bX + bW - 4, by, { align:'right' });
+        }
+
+        by += 6;
+        doc.setFillColor(26, 54, 93);
+        doc.roundedRect(bX, by - 4, bW, 10, 2, 2, 'F');
+        doc.setFont('helvetica','bold'); doc.setFontSize(11); doc.setTextColor(255,255,255);
+        doc.text('TOTAL:', bX + 4, by + 3);
+        doc.text(this._fmtMoeda(+p.total||0), bX + bW - 4, by + 3, { align:'right' });
+        y = by + 14;
+
         // ── Serviços ──
         const servicos = Array.isArray(p.servicos) ? p.servicos : [];
         if (servicos.length) {
@@ -1292,34 +1320,6 @@ const PacotesModule = {
             }
             y += 6;
         }
-
-        // ── Resumo de valores ──
-        _checkPage(42);
-        const bW = 80; const bX = pw - mg - bW;
-
-        doc.setFillColor(240, 247, 255);
-        doc.roundedRect(bX, y, bW, p.markup > 0 ? 28 : 18, 2, 2, 'F');
-        doc.setDrawColor(26, 54, 93); doc.setLineWidth(0.3);
-        doc.roundedRect(bX, y, bW, p.markup > 0 ? 28 : 18, 2, 2, 'S');
-
-        doc.setFont('helvetica','normal'); doc.setFontSize(9); doc.setTextColor(60,60,60);
-        let by = y + 7;
-        doc.text('Subtotal:', bX + 4, by);
-        doc.text(this._fmtMoeda(+p.subtotal||0), bX + bW - 4, by, { align:'right' });
-
-        if (p.markup > 0) {
-            by += 6;
-            doc.text(`Markup (${p.markup}%):`, bX + 4, by);
-            doc.text(this._fmtMoeda((+p.subtotal||0) * (+p.markup||0) / 100), bX + bW - 4, by, { align:'right' });
-        }
-
-        by += 6;
-        doc.setFillColor(26, 54, 93);
-        doc.roundedRect(bX, by - 4, bW, 10, 2, 2, 'F');
-        doc.setFont('helvetica','bold'); doc.setFontSize(11); doc.setTextColor(255,255,255);
-        doc.text('TOTAL:', bX + 4, by + 3);
-        doc.text(this._fmtMoeda(+p.total||0), bX + bW - 4, by + 3, { align:'right' });
-        y = by + 14;
 
         // ── Fotos por serviço ──
         // Cada serviço pode ter várias fotos; `imagem` é o formato antigo.
