@@ -9,9 +9,12 @@
 const cron = require('node-cron');
 const nodemailer = require('nodemailer');
 const { pool } = require('../config/database');
-const flightSearch = require('./flightSearch.service');
+const serpApiService = require('./serpapi.service');
+const azulPontosService = require('./azulPontos.service');
+const { withPuppeteerLock } = require('./puppeteerMutex');
 
 const SCHEDULE = process.env.MONITORAMENTO_CRON || '0 */3 * * *'; // a cada 3 horas
+const SCHEDULE_PONTOS = process.env.MONITORAMENTO_PONTOS_CRON || '0 6 * * *'; // 1x/dia — Puppeteer é caro
 
 // ─── Inicialização de tabelas ────────────────────────────────────────────────
 
@@ -62,6 +65,8 @@ async function criarTabelas() {
     `);
 
     await pool.query(`ALTER TABLE monitoramentos ADD COLUMN IF NOT EXISTS solicitante VARCHAR(255)`);
+    await pool.query(`ALTER TABLE monitoramentos ADD COLUMN IF NOT EXISTS moeda VARCHAR(20) DEFAULT 'dinheiro'`);
+    await pool.query(`ALTER TABLE monitoramentos ADD COLUMN IF NOT EXISTS "ultimoErro" TEXT`);
     await pool.query(`CREATE INDEX IF NOT EXISTS idx_monitoramento_ativo ON monitoramentos(ativo)`);
     await pool.query(`CREATE INDEX IF NOT EXISTS idx_mon_hist_monitoramento ON monitoramento_historico("monitoramentoId")`);
 }
@@ -83,6 +88,14 @@ function criarTransporter() {
 function formatarMoeda(v) {
     const n = parseFloat(v) || 0;
     return n.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
+}
+
+function formatarValor(v, moeda) {
+    if (moeda === 'pontos') {
+        const n = parseInt(v) || 0;
+        return `${n.toLocaleString('pt-BR')} pontos`;
+    }
+    return formatarMoeda(v);
 }
 
 function fmtData(d) {
@@ -166,7 +179,7 @@ function nomeCompanhia(codigo) {
     return map[(codigo || '').toUpperCase()] || codigo || '';
 }
 
-function blocoVoo(v, titulo) {
+function blocoVoo(v, titulo, moeda) {
     if (!v) return '';
     const cia = v.companhia || nomeCompanhia(v.companhiaCodigo) || 'N/D';
     const num = v.numero ? ` · Voo ${v.numero}` : '';
@@ -175,7 +188,7 @@ function blocoVoo(v, titulo) {
     const data = v.partida?.data ? fmtData(v.partida.data) : '';
     const dur = v.duracao ? ` · ${v.duracao}` : '';
     const escalas = v.escalas === 0 ? 'Direto' : (v.escalas > 0 ? `${v.escalas} escala(s)` : '');
-    const preco = v.preco != null ? formatarMoeda(v.preco) : '';
+    const preco = v.preco != null ? formatarValor(v.preco, moeda) : '';
 
     return `
         <div style="border:1px solid #e2e8f0; border-radius:10px; padding:14px; margin-top:10px; background:#f7fafc;">
@@ -227,15 +240,16 @@ function corpoEmail(mon, novoPreco, precoAnterior, voo) {
 
             <div style="background: linear-gradient(135deg, #48bb78 0%, #38a169 100%); color:#fff; padding:18px; border-radius:12px; text-align:center; margin:20px 0;">
                 <div style="font-size:13px; opacity:0.9;">Novo preço total</div>
-                <div style="font-size:32px; font-weight:700; margin:4px 0;">${formatarMoeda(novoPreco)}</div>
-                ${precoAnterior ? `<div style="font-size:13px; opacity:0.9;">Antes: <s>${formatarMoeda(precoAnterior)}</s> · Economia de ${formatarMoeda(baixa)} (${pct}%)</div>` : ''}
+                <div style="font-size:32px; font-weight:700; margin:4px 0;">${formatarValor(novoPreco, mon.moeda)}</div>
+                ${precoAnterior ? `<div style="font-size:13px; opacity:0.9;">Antes: <s>${formatarValor(precoAnterior, mon.moeda)}</s> · Economia de ${formatarValor(baixa, mon.moeda)} (${pct}%)</div>` : ''}
+                ${voo?.taxaBRL ? `<div style="font-size:13px; opacity:0.9;">+ ${formatarMoeda(voo.taxaBRL)} de taxas</div>` : ''}
             </div>
 
             <h2 style="color:#2d3748; font-size:18px; margin-top:18px; margin-bottom:6px;">Detalhes do voo</h2>
-            ${blocoVoo(ida,   mon.tipoViagem === 'idaVolta' ? 'Ida' : 'Voo')}
-            ${volta ? blocoVoo(volta, 'Volta') : ''}
+            ${blocoVoo(ida,   mon.tipoViagem === 'idaVolta' ? 'Ida' : 'Voo', mon.moeda)}
+            ${volta ? blocoVoo(volta, 'Volta', mon.moeda) : ''}
 
-            ${mon.precoAlvo ? `<p style="margin:16px 0 4px; color:#4a5568;">Preço-alvo configurado: <strong>${formatarMoeda(mon.precoAlvo)}</strong></p>` : ''}
+            ${mon.precoAlvo ? `<p style="margin:16px 0 4px; color:#4a5568;">${mon.moeda === 'pontos' ? 'Meta de pontos' : 'Preço-alvo'} configurado: <strong>${formatarValor(mon.precoAlvo, mon.moeda)}</strong></p>` : ''}
 
             <div style="margin-top:22px; text-align:center;">
                 <a href="${linkCia}" target="_blank"
@@ -267,7 +281,7 @@ async function enviarEmailBaixa(mon, novoPreco, precoAnterior, voo) {
     await transporter.sendMail({
         from: `"GiraMundoTour" <${process.env.EMAIL_USER}>`,
         to: destino,
-        subject: `📉 Preço baixou: ${mon.origem} → ${mon.destino} por ${formatarMoeda(novoPreco)}`,
+        subject: `📉 Preço baixou: ${mon.origem} → ${mon.destino} por ${formatarValor(novoPreco, mon.moeda)}`,
         html: corpoEmail(mon, novoPreco, precoAnterior, voo)
     });
     console.log(`[Monitoramento] Email de baixa enviado para ${destino}`);
@@ -344,6 +358,10 @@ async function verificarUm(mon) {
         return { ok: false, reason: 'pausado' };
     }
 
+    if (mon.moeda === 'pontos') {
+        return verificarUmPontos(mon);
+    }
+
     const idaDatas   = amostrarDatas(gerarDatasPeriodo(mon.dataIdaInicio,   mon.dataIdaFim),   5);
     const voltaDatas = mon.tipoViagem === 'idaVolta'
         ? amostrarDatas(gerarDatasPeriodo(mon.dataVoltaInicio, mon.dataVoltaFim), 5)
@@ -376,7 +394,7 @@ async function verificarUm(mon) {
                     bebes:    mon.bebes     || 0,
                     classe:   mon.classe    || 'economica'
                 };
-                const r = await flightSearch.buscarVoos(params);
+                const r = await serpApiService.buscarVoos(params);
                 const idaVoos   = r?.ida   || [];
                 const voltaVoos = r?.volta || [];
 
@@ -399,7 +417,7 @@ async function verificarUm(mon) {
                         detalhes:  {
                             ida:   resumoVoo(menorIda),
                             volta: resumoVoo(menorVolta),
-                            fonte: r.meta?.fonte
+                            fonte: 'google_flights'
                         }
                     };
                 }
@@ -463,9 +481,133 @@ async function verificarUm(mon) {
     return { ok: true, preco: melhor.preco, baixou: baixouDoAnterior, abaixoDoMaximo, notificou: notificar };
 }
 
+// ─── Verificação de preço em pontos (Azul) ──────────────────────────────────
+// Só a data exata de dataIdaInicio/dataVoltaInicio (sem varrer período) —
+// cada leg já é um lançamento inteiro de Chromium (via withPuppeteerLock),
+// bem mais caro que o caminho em dinheiro (HTTP puro via SerpAPI). Ida e
+// volta são duas buscas one-way separadas, somadas — a Azul não confirmou
+// suportar os dois trechos numa única URL de busca em pontos. Roda num
+// cron separado e mais espaçado.
+
+function _resumoLegPontos(origem, destino, data, pontos) {
+    return {
+        companhia: 'Azul', companhiaCodigo: 'AD',
+        origem, destino,
+        partida: { data, horario: null },
+        chegada: { data, horario: null },
+        preco: pontos
+    };
+}
+
+async function verificarUmPontos(mon) {
+    const agora = new Date();
+    const origem  = String(mon.origem  || '').split(',')[0].trim();
+    const destino = String(mon.destino || '').split(',')[0].trim();
+    const ehIdaVolta = mon.tipoViagem === 'idaVolta' && mon.dataVoltaInicio;
+
+    const idaResultado = await withPuppeteerLock(() => azulPontosService.buscarPrecoPontos({
+        origem, destino, dataIda: mon.dataIdaInicio, adultos: mon.adultos || 1
+    })).catch(err => ({ ok: false, erro: err.message }));
+
+    if (!idaResultado.ok) {
+        await pool.query(
+            `UPDATE monitoramentos SET "ultimaVerificacao"=$1, "ultimoErro"=$2, "updatedAt"=$1 WHERE id=$3`,
+            [agora, `ida: ${idaResultado.erro || 'falhou'}`, mon.id]
+        );
+        console.warn(`[Monitoramento ${mon.id}] pontos Azul (ida) falhou:`, idaResultado.erro);
+        return { ok: false, reason: idaResultado.erro || 'falhou' };
+    }
+
+    let voltaResultado = null;
+    if (ehIdaVolta) {
+        voltaResultado = await withPuppeteerLock(() => azulPontosService.buscarPrecoPontos({
+            origem: destino, destino: origem, dataIda: mon.dataVoltaInicio, adultos: mon.adultos || 1
+        })).catch(err => ({ ok: false, erro: err.message }));
+
+        if (!voltaResultado.ok) {
+            await pool.query(
+                `UPDATE monitoramentos SET "ultimaVerificacao"=$1, "ultimoErro"=$2, "updatedAt"=$1 WHERE id=$3`,
+                [agora, `volta: ${voltaResultado.erro || 'falhou'}`, mon.id]
+            );
+            console.warn(`[Monitoramento ${mon.id}] pontos Azul (volta) falhou:`, voltaResultado.erro);
+            return { ok: false, reason: voltaResultado.erro || 'falhou' };
+        }
+    }
+
+    const totalPontos = idaResultado.pontos + (voltaResultado?.pontos || 0);
+    const totalTaxaBRL = (idaResultado.taxaBRL || 0) + (voltaResultado?.taxaBRL || 0);
+
+    const melhor = {
+        preco: totalPontos,
+        companhia: 'Azul',
+        dataIda: mon.dataIdaInicio,
+        dataVolta: ehIdaVolta ? mon.dataVoltaInicio : null,
+        taxaBRL: totalTaxaBRL || undefined,
+        moeda: 'pontos',
+        detalhes: {
+            ida: _resumoLegPontos(mon.origem, mon.destino, mon.dataIdaInicio, idaResultado.pontos),
+            volta: ehIdaVolta ? _resumoLegPontos(mon.destino, mon.origem, mon.dataVoltaInicio, voltaResultado.pontos) : null,
+            fonte: 'azul_pontos_scrape'
+        }
+    };
+
+    const precoAnterior = mon.precoAtual != null ? +mon.precoAtual : null;
+    const precoMax = mon.precoAlvo != null ? +mon.precoAlvo : null;
+    const abaixoDoMaximo = precoMax != null && melhor.preco < precoMax;
+    const baixouDoAnterior = precoAnterior != null && melhor.preco < precoAnterior;
+    const notificar = baixouDoAnterior && abaixoDoMaximo;
+
+    await pool.query(
+        `INSERT INTO monitoramento_historico ("monitoramentoId", preco, companhia, "dataIda", "dataVolta", detalhes)
+         VALUES ($1, $2, $3, $4, $5, $6)`,
+        [mon.id, melhor.preco, melhor.companhia, melhor.dataIda, melhor.dataVolta, JSON.stringify(melhor.detalhes)]
+    );
+
+    const precoInicial = mon.precoInicial != null ? +mon.precoInicial : melhor.preco;
+    await pool.query(
+        `UPDATE monitoramentos
+            SET "precoAtual"=$1, "precoInicial"=COALESCE("precoInicial", $2),
+                "melhorVoo"=$3, "ultimaVerificacao"=$4, "updatedAt"=$4, "ultimoErro"=NULL
+          WHERE id=$5`,
+        [melhor.preco, precoInicial, JSON.stringify(melhor), agora, mon.id]
+    );
+
+    if (notificar) {
+        try {
+            await enviarEmailBaixa(mon, melhor.preco, precoAnterior, melhor);
+            await pool.query(
+                `UPDATE monitoramentos SET "ultimaNotificacao"=$1 WHERE id=$2`,
+                [agora, mon.id]
+            );
+        } catch (err) {
+            console.error(`[Monitoramento ${mon.id}] erro ao enviar email:`, err.message);
+        }
+    }
+
+    return { ok: true, preco: melhor.preco, baixou: baixouDoAnterior, abaixoDoMaximo, notificou: notificar };
+}
+
+async function verificarTodosPontos() {
+    try {
+        const { rows } = await pool.query(`SELECT * FROM monitoramentos WHERE ativo = TRUE AND moeda = 'pontos'`);
+        console.log(`[Monitoramento] Verificando ${rows.length} monitoramento(s) em pontos...`);
+        for (const mon of rows) {
+            try {
+                await verificarUmPontos(mon);
+            } catch (err) {
+                console.error(`[Monitoramento ${mon.id}] erro (pontos):`, err.message);
+            }
+        }
+    } catch (err) {
+        console.error('[Monitoramento] erro ao listar monitoramentos em pontos:', err.message);
+    }
+}
+
 async function verificarTodos() {
     try {
-        const { rows } = await pool.query(`SELECT * FROM monitoramentos WHERE ativo = TRUE`);
+        // moeda='pontos' roda no cron separado verificarTodosPontos() — Puppeteer é caro demais
+        // para o ciclo de 3h deste cron, que foi desenhado para chamadas HTTP do SerpAPI.
+        const { rows } = await pool.query(`SELECT * FROM monitoramentos WHERE ativo = TRUE AND moeda IS DISTINCT FROM 'pontos'`);
         console.log(`[Monitoramento] Verificando ${rows.length} monitoramento(s)...`);
         for (const mon of rows) {
             try {
@@ -497,6 +639,11 @@ async function iniciar() {
         verificarTodos().catch(err => console.error('[Monitoramento] cron erro:', err.message));
     });
     console.log(`[Monitoramento] Cron agendado: ${SCHEDULE}`);
+
+    cron.schedule(SCHEDULE_PONTOS, () => {
+        verificarTodosPontos().catch(err => console.error('[Monitoramento] cron pontos erro:', err.message));
+    });
+    console.log(`[Monitoramento] Cron de pontos agendado: ${SCHEDULE_PONTOS}`);
 }
 
-module.exports = { iniciar, verificarTodos, verificarUm, criarTabelas };
+module.exports = { iniciar, verificarTodos, verificarTodosPontos, verificarUm, verificarUmPontos, criarTabelas };

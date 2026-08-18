@@ -56,8 +56,8 @@ router.post('/', async (req, res) => {
                 origem, destino, "tipoViagem",
                 "dataIdaInicio", "dataIdaFim", "dataVoltaInicio", "dataVoltaFim",
                 adultos, criancas, bebes, classe,
-                "precoAlvo", "emailDestino", ativo, observacoes, solicitante
-            ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20)
+                "precoAlvo", "emailDestino", ativo, observacoes, solicitante, moeda
+            ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21)
             RETURNING *`,
             [
                 b.clienteId || null,
@@ -79,7 +79,8 @@ router.post('/', async (req, res) => {
                 b.emailDestino || 'giramundotourag@gmail.com',
                 b.ativo !== false,
                 b.observacoes || null,
-                b.solicitante || null
+                b.solicitante || null,
+                b.moeda === 'pontos' ? 'pontos' : 'dinheiro'
             ]
         );
         res.status(201).json(rows[0]);
@@ -103,7 +104,7 @@ router.put('/:id', async (req, res) => {
             dataVoltaInicio: '"dataVoltaInicio"', dataVoltaFim: '"dataVoltaFim"',
             adultos: 'adultos', criancas: 'criancas', bebes: 'bebes', classe: 'classe',
             precoAlvo: '"precoAlvo"', emailDestino: '"emailDestino"', ativo: 'ativo', observacoes: 'observacoes',
-            solicitante: 'solicitante'
+            solicitante: 'solicitante', moeda: 'moeda'
         };
         for (const key of Object.keys(map)) {
             if (key in b) {

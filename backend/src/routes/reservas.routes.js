@@ -19,6 +19,7 @@ const path = require('path');
 const { pool }           = require('../config/database');
 const { authMiddleware } = require('../middleware/auth.middleware');
 const AlertasService     = require('../services/alertas.service');
+const { withPuppeteerLock } = require('../services/puppeteerMutex');
 
 // ─────────────────────────────────────────────
 // Helpers
@@ -818,6 +819,9 @@ router.post('/capturar', async (req, res) => {
     const isGol   = url.includes('voegol.com.br') || url.includes('b2c.voegol');
     const isTap   = url.includes('flytap.com');
 
+    // Serializa com qualquer outro lançamento de Puppeteer no processo (ex: monitoramento
+    // de pontos da Azul) — evita OOM por múltiplas instâncias de Chromium concorrentes.
+    await withPuppeteerLock(async () => {
     try {
         const launchOptions = {
             headless: true,
@@ -1457,6 +1461,7 @@ router.post('/capturar', async (req, res) => {
     } finally {
         if (browser) await browser.close().catch(() => {});
     }
+    });
 });
 
 // ─────────────────────────────────────────────
@@ -2322,6 +2327,9 @@ async function _executarGolLookup(jobId, pnr, origin, lastName) {
             golJobs.set(jobId, { status: 'failed', error: 'Timeout 70s — GOL não retornou JWT', createdAt: Date.now() });
     }, 70000);
 
+    // Serializa com qualquer outro lançamento de Puppeteer no processo (ex: monitoramento
+    // de pontos da Azul) — evita OOM por múltiplas instâncias de Chromium concorrentes.
+    await withPuppeteerLock(async () => {
     try {
         const chromePath = process.env.PUPPETEER_EXECUTABLE_PATH || undefined;
         console.log('[GolLookup] chromePath:', chromePath || 'default');
@@ -2426,6 +2434,7 @@ async function _executarGolLookup(jobId, pnr, origin, lastName) {
         if (browser) await browser.close().catch(() => {});
         console.log(`[GolLookup] job ${jobId} encerrado status:`, golJobs.get(jobId)?.status);
     }
+    });
 }
 
 /**

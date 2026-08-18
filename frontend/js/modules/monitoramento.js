@@ -105,9 +105,9 @@ const MonitoramentoModule = {
                 ? `<span class="badge bg-success">Ativo</span>`
                 : `<span class="badge bg-secondary">Pausado</span>`;
 
-            const precoAtual = m.precoAtual != null ? this._fmtMoeda(m.precoAtual) : '<span class="text-muted">-</span>';
-            const precoIni = m.precoInicial != null ? this._fmtMoeda(m.precoInicial) : '<span class="text-muted">-</span>';
-            const precoAlvo = m.precoAlvo != null ? this._fmtMoeda(m.precoAlvo) : '<span class="text-muted">-</span>';
+            const precoAtual = m.precoAtual != null ? this._fmtValor(m.precoAtual, m.moeda) : '<span class="text-muted">-</span>';
+            const precoIni = m.precoInicial != null ? this._fmtValor(m.precoInicial, m.moeda) : '<span class="text-muted">-</span>';
+            const precoAlvo = m.precoAlvo != null ? this._fmtValor(m.precoAlvo, m.moeda) : '<span class="text-muted">-</span>';
 
             const baixou = (m.precoInicial != null && m.precoAtual != null && +m.precoAtual < +m.precoInicial);
             const mv = m.melhorVoo || null;
@@ -135,6 +135,9 @@ const MonitoramentoModule = {
             const ultimaVerif = m.ultimaVerificacao
                 ? new Date(m.ultimaVerificacao).toLocaleString('pt-BR')
                 : '<span class="text-muted">Nunca</span>';
+            const erroIcon = m.ultimoErro
+                ? ` <i class="bi bi-exclamation-triangle-fill text-warning" title="Última verificação falhou: ${this._escape(m.ultimoErro)}"></i>`
+                : '';
 
             return `
                 <tr>
@@ -146,14 +149,14 @@ const MonitoramentoModule = {
                     <td><small>${m.clienteTelefone || '<span class="text-muted">-</span>'}</small></td>
                     <td><small>${m.solicitante || '<span class="text-muted">-</span>'}</small></td>
                     <td><strong>${m.origem} → ${m.destino}</strong><br>
-                        <small class="text-muted">${m.tipoViagem === 'idaVolta' ? 'Ida e Volta' : 'Somente Ida'} • ${m.adultos}adl</small>
+                        <small class="text-muted">${m.tipoViagem === 'idaVolta' ? 'Ida e Volta' : 'Somente Ida'} • ${m.adultos}adl${m.moeda === 'pontos' ? ' • <span class="badge bg-info text-dark">Pontos</span>' : ''}</small>
                     </td>
                     <td>${periodoIda}</td>
                     <td>${periodoVolta}</td>
                     <td>${precoIni}</td>
                     <td>${precoAtualHTML}</td>
                     <td>${precoAlvo}</td>
-                    <td><small>${ultimaVerif}</small></td>
+                    <td><small>${ultimaVerif}</small>${erroIcon}</td>
                     <td>
                         <div class="d-flex gap-1 flex-wrap">
                             <button class="btn btn-sm btn-outline-primary" title="Verificar agora"
@@ -262,7 +265,7 @@ const MonitoramentoModule = {
                             </div>
                             <div class="col-md-3">
                                 <label class="form-label">Tipo</label>
-                                <select class="form-select" id="monTipoViagem" onchange="MonitoramentoModule._toggleVolta()">
+                                <select class="form-select" id="monTipoViagem" onchange="MonitoramentoModule._toggleMoeda()">
                                     <option value="idaVolta" ${m.tipoViagem !== 'ida' ? 'selected' : ''}>Ida e Volta</option>
                                     <option value="ida" ${m.tipoViagem === 'ida' ? 'selected' : ''}>Somente Ida</option>
                                 </select>
@@ -304,7 +307,15 @@ const MonitoramentoModule = {
                                 </select>
                             </div>
                             <div class="col-md-3">
-                                <label class="form-label">Preço máximo (R$) <span class="text-danger">*</span></label>
+                                <label class="form-label">Moeda</label>
+                                <select class="form-select" id="monMoeda" onchange="MonitoramentoModule._toggleMoeda()">
+                                    <option value="dinheiro" ${m.moeda !== 'pontos' ? 'selected' : ''}>Dinheiro (R$)</option>
+                                    <option value="pontos" ${m.moeda === 'pontos' ? 'selected' : ''}>Pontos Azul</option>
+                                </select>
+                                <small class="text-muted" id="monMoedaAjuda"></small>
+                            </div>
+                            <div class="col-md-3">
+                                <label class="form-label" id="monPrecoAlvoLabel">Preço máximo (R$) <span class="text-danger">*</span></label>
                                 <input type="number" step="0.01" class="form-control" id="monPrecoAlvo"
                                        value="${m.precoAlvo || ''}" placeholder="Ex: 1500" required>
                                 <small class="text-muted">Notifica ao encontrar valor menor</small>
@@ -324,7 +335,7 @@ const MonitoramentoModule = {
             </div>
         `;
 
-        this._toggleVolta();
+        this._toggleMoeda();
         this._setupAeroportos();
         this._onDateChange('idaInicio');
         wrap.scrollIntoView({ behavior: 'smooth', block: 'start' });
@@ -394,6 +405,28 @@ const MonitoramentoModule = {
         });
     },
 
+    // Monitoramento em pontos (Azul) verifica 1x/dia, nas datas exatas informadas
+    // (sem varrer período) — bem mais caro (Puppeteer) que o caminho em dinheiro
+    // (HTTP puro). Ida e volta são duas buscas separadas, com os pontos somados.
+    _toggleMoeda() {
+        const pontos = document.getElementById('monMoeda')?.value === 'pontos';
+        const label = document.getElementById('monPrecoAlvoLabel');
+        const ajuda = document.getElementById('monMoedaAjuda');
+        const tipoViagem = document.getElementById('monTipoViagem')?.value;
+
+        if (label) {
+            label.innerHTML = pontos
+                ? 'Meta de pontos <span class="text-danger">*</span>'
+                : 'Preço máximo (R$) <span class="text-danger">*</span>';
+        }
+        if (ajuda) {
+            ajuda.textContent = pontos
+                ? `Verificação 1x/dia, na${tipoViagem === 'idaVolta' ? 's datas exatas informadas (ida + volta somados)' : ' data exata informada'}.`
+                : '';
+        }
+        this._toggleVolta();
+    },
+
     _onClienteInput() {
         const nomeInput = document.getElementById('monClienteNome');
         if (!nomeInput) return;
@@ -425,6 +458,7 @@ const MonitoramentoModule = {
             dataVoltaFim:    document.getElementById('monDataVoltaFim').value || null,
             adultos:   parseInt(document.getElementById('monAdultos').value) || 1,
             classe:    document.getElementById('monClasse').value,
+            moeda:     document.getElementById('monMoeda').value,
             precoAlvo: document.getElementById('monPrecoAlvo').value || null,
             emailDestino: document.getElementById('monEmailDestino').value.trim() || 'giramundotourag@gmail.com',
             observacoes:  document.getElementById('monObservacoes').value.trim() || null
@@ -435,7 +469,9 @@ const MonitoramentoModule = {
             return;
         }
         if (!payload.precoAlvo || parseFloat(payload.precoAlvo) <= 0) {
-            App.showToast('Informe o preço máximo (valor acima do qual não notifica)', 'warning');
+            App.showToast(payload.moeda === 'pontos'
+                ? 'Informe a meta de pontos (valor acima do qual não notifica)'
+                : 'Informe o preço máximo (valor acima do qual não notifica)', 'warning');
             return;
         }
 
@@ -467,14 +503,15 @@ const MonitoramentoModule = {
     },
 
     async verificarAgora(id) {
+        const moeda = this._monitoramentos.find(m => m.id === id)?.moeda;
         App.showToast('Verificando preços (pode levar alguns segundos)...', 'info');
         const resp = await apiCall(`/api/monitoramentos/${id}/verificar`, { method: 'POST' });
         if (!resp || !resp.ok) { App.showToast('Erro na verificação', 'danger'); return; }
         const r = await resp.json();
         if (r.resultado?.ok) {
             const msg = r.resultado.notificou
-                ? `Preço ${this._fmtMoeda(r.resultado.preco)} — email enviado`
-                : `Menor preço encontrado: ${this._fmtMoeda(r.resultado.preco)}`;
+                ? `Preço ${this._fmtValor(r.resultado.preco, moeda)} — email enviado`
+                : `Menor preço encontrado: ${this._fmtValor(r.resultado.preco, moeda)}`;
             App.showToast(msg, 'success');
         } else {
             App.showToast('Nenhum voo encontrado nesse período', 'warning');
@@ -493,6 +530,14 @@ const MonitoramentoModule = {
     _fmtMoeda(v) {
         const n = parseFloat(v) || 0;
         return n.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
+    },
+
+    _fmtValor(v, moeda) {
+        if (moeda === 'pontos') {
+            const n = parseInt(v) || 0;
+            return `${n.toLocaleString('pt-BR')} pontos`;
+        }
+        return this._fmtMoeda(v);
     },
 
     _fmtData(d) {
@@ -538,7 +583,7 @@ const MonitoramentoModule = {
             const dur = durStr ? ` • ${durStr}` : '';
             const escalas = v.escalas === 0 ? 'Direto' : (v.escalas > 0 ? `${v.escalas} escala(s)` : '');
             const precoNum = (typeof v.preco === 'object') ? (v.preco?.valor ?? v.preco?.total ?? null) : v.preco;
-            const preco = precoNum != null ? this._fmtMoeda(precoNum) : '';
+            const preco = precoNum != null ? this._fmtValor(precoNum, m.moeda) : '';
 
             return `
                 <div class="card mb-2">
@@ -566,14 +611,16 @@ const MonitoramentoModule = {
             amadeus: 'Amadeus',
             kiwi: 'Kiwi',
             skyscanner: 'SkyScanner',
-            simulado: 'Simulado'
+            simulado: 'Simulado',
+            azul_pontos_scrape: 'Azul (pontos)'
         }[mv.detalhes?.fonte] || (mv.detalhes?.fonte || '');
 
         const totalHtml = `
             <div class="alert alert-primary d-flex justify-content-between align-items-center mb-3">
                 <div>
                     <div class="small">Menor preço encontrado</div>
-                    <div class="fs-3 fw-bold">${this._fmtMoeda(mv.preco)}</div>
+                    <div class="fs-3 fw-bold">${this._fmtValor(mv.preco, m.moeda)}</div>
+                    ${mv.taxaBRL ? `<div class="small text-muted">+ ${this._fmtMoeda(mv.taxaBRL)} de taxas</div>` : ''}
                 </div>
                 <div class="text-end">
                     <div class="small text-muted">${m.origem} → ${m.destino}</div>
