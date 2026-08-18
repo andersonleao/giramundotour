@@ -1139,55 +1139,55 @@ const PacotesModule = {
 
         // ── Título da proposta ──
         doc.setFillColor(232, 244, 255);
-        doc.roundedRect(mg, y, cw, 24, 2, 2, 'F');
-        doc.setFont('helvetica','bold'); doc.setFontSize(14); doc.setTextColor(26, 54, 93);
-        doc.text('PROPOSTA DE PACOTE TURISTICO', pw/2, y + 9, { align:'center' });
-        doc.setFont('helvetica','normal'); doc.setFontSize(9); doc.setTextColor(80,80,80);
+        doc.roundedRect(mg, y, cw, 20, 2, 2, 'F');
+        doc.setFont('helvetica','bold'); doc.setFontSize(13); doc.setTextColor(26, 54, 93);
+        doc.text('PROPOSTA DE PACOTE TURISTICO', pw/2, y + 8, { align:'center' });
+        doc.setFont('helvetica','normal'); doc.setFontSize(8.5); doc.setTextColor(80,80,80);
         const dataEmissao = p.createdAt ? this._fmtData(p.createdAt) : this._fmtData(new Date().toISOString());
         const codigo = p.id !== 'preview' ? `#${p.id.slice(0,8).toUpperCase()}` : '#PREVIA';
         // Validade: sempre a data atual (mesmo padrao do relatorio de Cotacao)
         const validadeStr = '   |   Valido ate: ' + this._fmtData(this._dataLocalISO());
-        doc.text(`Emissao: ${dataEmissao}   |   Codigo: ${codigo}${validadeStr}`, pw/2, y + 18, { align:'center' });
-        y += 30;
+        doc.text(`Emissao: ${dataEmissao}   |   Codigo: ${codigo}${validadeStr}`, pw/2, y + 15, { align:'center' });
+        y += 25;
 
         // ── Destino / Viagem ──
         doc.setFillColor(26, 54, 93);
-        doc.roundedRect(mg, y, cw, 30, 2, 2, 'F');
-        doc.setFont('helvetica','bold'); doc.setFontSize(16); doc.setTextColor(255,255,255);
+        doc.roundedRect(mg, y, cw, 26, 2, 2, 'F');
+        doc.setFont('helvetica','bold'); doc.setFontSize(15); doc.setTextColor(255,255,255);
         const destinoFit = doc.splitTextToSize(p.destino || '', cw - 60);
-        doc.text(destinoFit[0] || '', mg + 8, y + 13);
+        doc.text(destinoFit[0] || '', mg + 8, y + 11);
         // Datas no canto direito (mesma linha do destino)
         const dPar = p.dataPartida ? this._fmtData(p.dataPartida) : '-';
         const dRet = p.dataRetorno ? this._fmtData(p.dataRetorno) : '-';
         doc.setFont('helvetica','normal'); doc.setFontSize(9); doc.setTextColor(200,230,255);
-        doc.text(`Período: ${dPar} a ${dRet}`, pw - mg - 4, y + 13, { align:'right' });
+        doc.text(`Período: ${dPar} a ${dRet}`, pw - mg - 4, y + 11, { align:'right' });
         // Segunda linha: nomeViagem + pax
         if (p.nomeViagem) {
-            doc.setFont('helvetica','italic'); doc.setFontSize(10); doc.setTextColor(200,225,255);
-            doc.text(p.nomeViagem, mg + 8, y + 24);
+            doc.setFont('helvetica','italic'); doc.setFontSize(9.5); doc.setTextColor(200,225,255);
+            doc.text(p.nomeViagem, mg + 8, y + 21);
         }
         const pax = (+p.adultos||1) + (+p.criancas||0) + (+p.bebes||0);
         doc.setFont('helvetica','normal'); doc.setFontSize(9); doc.setTextColor(200,230,255);
-        doc.text(`${pax} passageiro${pax>1?'s':''}`, pw - mg - 4, y + 24, { align:'right' });
-        y += 36;
+        doc.text(`${pax} passageiro${pax>1?'s':''}`, pw - mg - 4, y + 21, { align:'right' });
+        y += 32;
 
         // ── Dados do cliente ──
         if (p.clienteNome || p.clienteEmail || p.clienteTelefone) {
-            _checkPage(22);
+            _checkPage(20);
             doc.setFont('helvetica','bold'); doc.setFontSize(10); doc.setTextColor(26, 54, 93);
             doc.text('CLIENTE', mg, y + 5);
             doc.setDrawColor(26, 54, 93); doc.setLineWidth(0.3);
             doc.line(mg + 18, y + 3, pw - mg, y + 3);
-            y += 8;
+            y += 7.5;
             doc.setFont('helvetica','normal'); doc.setFontSize(9); doc.setTextColor(40,40,40);
-            if (p.clienteNome)     { doc.text(`Nome: ${p.clienteNome}`,           mg, y);      y += 5.5; }
-            if (p.clienteEmail)    { doc.text(`E-mail: ${p.clienteEmail}`,        mg, y);      y += 5.5; }
-            if (p.clienteTelefone) { doc.text(`Telefone: ${p.clienteTelefone}`,   mg, y);      y += 5.5; }
-            y += 4;
+            if (p.clienteNome)     { doc.text(`Nome: ${p.clienteNome}`,           mg, y);      y += 5; }
+            if (p.clienteEmail)    { doc.text(`E-mail: ${p.clienteEmail}`,        mg, y);      y += 5; }
+            if (p.clienteTelefone) { doc.text(`Telefone: ${p.clienteTelefone}`,   mg, y);      y += 5; }
+            y += 2.5;
         }
 
         // ── Passageiros ──
-        _checkPage(14);
+        _checkPage(12);
         const linhasPax = [];
         if (+p.adultos  > 0) linhasPax.push(`${p.adultos} adulto${p.adultos>1?'s':''}`);
         if (+p.criancas > 0) linhasPax.push(`${p.criancas} criança${p.criancas>1?'s':''}`);
@@ -1195,9 +1195,9 @@ const PacotesModule = {
         doc.setFont('helvetica','bold'); doc.setFontSize(10); doc.setTextColor(26, 54, 93);
         doc.text('COMPOSIÇÃO', mg, y + 5);
         doc.line(mg + 32, y + 3, pw - mg, y + 3);
-        y += 8;
+        y += 7.5;
         doc.setFont('helvetica','normal'); doc.setFontSize(9); doc.setTextColor(40,40,40);
-        doc.text(linhasPax.join('  |  '), mg, y); y += 8;
+        doc.text(linhasPax.join('  |  '), mg, y); y += 6;
 
         // ── Serviços ──
         const servicos = Array.isArray(p.servicos) ? p.servicos : [];
@@ -1290,11 +1290,11 @@ const PacotesModule = {
                 doc.line(mg, y + rowH, mg + cw, y + rowH);
                 y += rowH;
             }
-            y += 6;
+            y += 4;
         }
 
         // ── Resumo de valores ──
-        _checkPage(42);
+        _checkPage((p.markup > 0 ? 28 : 18) + 4);
         const bW = 80; const bX = pw - mg - bW;
 
         doc.setFillColor(240, 247, 255);
