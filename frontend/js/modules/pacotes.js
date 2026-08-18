@@ -1291,57 +1291,6 @@ const PacotesModule = {
                 y += rowH;
             }
             y += 6;
-
-            // ── Fotos por serviço ──
-            // Cada serviço pode ter várias fotos; `imagem` é o formato antigo.
-            const servicosComFotos = servicos
-                .map(s => ({ servico: s, lista: Array.isArray(s.imagens) ? s.imagens : (s.imagem ? [s.imagem] : []) }))
-                .filter(sf => sf.lista.length);
-
-            if (servicosComFotos.length) {
-                const gap  = 6;
-                const pad  = 2.5;
-                const cardW = (cw - gap) / 2;   // 2 colunas com gap
-                const imgW  = cardW - pad * 2;
-                const imgH  = imgW * 0.62;        // proporção ~16:10
-                const cardH = imgH + pad * 2;
-
-                for (const { servico, lista } of servicosComFotos) {
-                    _checkPage(cardH + 12);
-
-                    const tInfo = this.TIPOS.find(t => t.value === servico.tipo) || { label: servico.tipo };
-                    const titulo = `${tInfo.label}${servico.descricao ? ' — ' + servico.descricao.substring(0, 45) : ''}`;
-
-                    doc.setFont('helvetica','bold'); doc.setFontSize(9.5); doc.setTextColor(26, 54, 93);
-                    doc.text(titulo.toUpperCase(), mg, y + 4);
-                    doc.setDrawColor(26, 54, 93); doc.setLineWidth(0.25);
-                    doc.line(mg, y + 6.5, mg + cw, y + 6.5);
-                    y += 11;
-
-                    let col = 0;
-                    for (const img of lista) {
-                        _checkPage(cardH + 6);
-                        const x = mg + col * (cardW + gap);
-
-                        // Sombra / moldura
-                        doc.setFillColor(220, 230, 245);
-                        doc.roundedRect(x + 1, y + 1, cardW, cardH, 2.5, 2.5, 'F');
-                        doc.setFillColor(255, 255, 255);
-                        doc.roundedRect(x, y, cardW, cardH, 2.5, 2.5, 'F');
-                        doc.setDrawColor(210, 220, 240); doc.setLineWidth(0.2);
-                        doc.roundedRect(x, y, cardW, cardH, 2.5, 2.5, 'S');
-
-                        try {
-                            doc.addImage(img, x + pad, y + pad, imgW, imgH);
-                        } catch (_) {}
-
-                        col++;
-                        if (col === 2) { col = 0; y += cardH + gap; }
-                    }
-                    if (col === 1) y += cardH + gap;
-                    y += 5;
-                }
-            }
         }
 
         // ── Resumo de valores ──
@@ -1371,6 +1320,57 @@ const PacotesModule = {
         doc.text('TOTAL:', bX + 4, by + 3);
         doc.text(this._fmtMoeda(+p.total||0), bX + bW - 4, by + 3, { align:'right' });
         y = by + 14;
+
+        // ── Fotos por serviço ──
+        // Cada serviço pode ter várias fotos; `imagem` é o formato antigo.
+        const servicosComFotos = servicos
+            .map(s => ({ servico: s, lista: Array.isArray(s.imagens) ? s.imagens : (s.imagem ? [s.imagem] : []) }))
+            .filter(sf => sf.lista.length);
+
+        if (servicosComFotos.length) {
+            const gap  = 6;
+            const pad  = 2.5;
+            const cardW = (cw - gap) / 2;   // 2 colunas com gap
+            const imgW  = cardW - pad * 2;
+            const imgH  = imgW * 0.62;        // proporção ~16:10
+            const cardH = imgH + pad * 2;
+
+            for (const { servico, lista } of servicosComFotos) {
+                _checkPage(cardH + 12);
+
+                const tInfo = this.TIPOS.find(t => t.value === servico.tipo) || { label: servico.tipo };
+                const titulo = `${tInfo.label}${servico.descricao ? ' — ' + servico.descricao.substring(0, 45) : ''}`;
+
+                doc.setFont('helvetica','bold'); doc.setFontSize(9.5); doc.setTextColor(26, 54, 93);
+                doc.text(titulo.toUpperCase(), mg, y + 4);
+                doc.setDrawColor(26, 54, 93); doc.setLineWidth(0.25);
+                doc.line(mg, y + 6.5, mg + cw, y + 6.5);
+                y += 11;
+
+                let col = 0;
+                for (const img of lista) {
+                    _checkPage(cardH + 6);
+                    const x = mg + col * (cardW + gap);
+
+                    // Sombra / moldura
+                    doc.setFillColor(220, 230, 245);
+                    doc.roundedRect(x + 1, y + 1, cardW, cardH, 2.5, 2.5, 'F');
+                    doc.setFillColor(255, 255, 255);
+                    doc.roundedRect(x, y, cardW, cardH, 2.5, 2.5, 'F');
+                    doc.setDrawColor(210, 220, 240); doc.setLineWidth(0.2);
+                    doc.roundedRect(x, y, cardW, cardH, 2.5, 2.5, 'S');
+
+                    try {
+                        doc.addImage(img, x + pad, y + pad, imgW, imgH);
+                    } catch (_) {}
+
+                    col++;
+                    if (col === 2) { col = 0; y += cardH + gap; }
+                }
+                if (col === 1) y += cardH + gap;
+                y += 5;
+            }
+        }
 
         // ── Status ──
         const stInfo = this.STATUS[p.status] || { label: p.status || 'Orçamento' };
