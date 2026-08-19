@@ -1143,7 +1143,7 @@ const PacotesModule = {
         doc.setFont('helvetica','bold'); doc.setFontSize(13); doc.setTextColor(26, 54, 93);
         doc.text('PROPOSTA DE PACOTE TURISTICO', pw/2, y + 8, { align:'center' });
         doc.setFont('helvetica','normal'); doc.setFontSize(8.5); doc.setTextColor(80,80,80);
-        const dataEmissao = p.createdAt ? this._fmtData(p.createdAt) : this._fmtData(new Date().toISOString());
+        const dataEmissao = this._fmtData(this._dataLocalISO());
         const codigo = p.id !== 'preview' ? `#${p.id.slice(0,8).toUpperCase()}` : '#PREVIA';
         // Validade: sempre a data atual (mesmo padrao do relatorio de Cotacao)
         const validadeStr = '   |   Valido ate: ' + this._fmtData(this._dataLocalISO());
