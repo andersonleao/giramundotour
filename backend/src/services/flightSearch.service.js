@@ -55,7 +55,8 @@ class FlightSearchService {
             'CGB': { cidade: 'Cuiabá', nome: 'Marechal Rondon', uf: 'MT' },
             'GYN': { cidade: 'Goiânia', nome: 'Santa Genoveva', uf: 'GO' },
             'OPS': { cidade: 'Sinop', nome: 'Pres. João Batista Figueiredo', uf: 'MT' },
-            'IGU': { cidade: 'Foz do Iguaçu', nome: 'Cataratas', uf: 'PR' }
+            'IGU': { cidade: 'Foz do Iguaçu', nome: 'Cataratas', uf: 'PR' },
+            'UDI': { cidade: 'Uberlândia', nome: 'Ten. Cel. Av. César Bombonato', uf: 'MG' }
         };
 
         // Aeroportos onde a LATAM (LA) opera regularmente mas os provedores

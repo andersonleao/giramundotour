@@ -38,6 +38,7 @@ const AIRPORTS = [
     { code: 'SJP', name: 'Aeroporto Estadual de São José do Rio Preto', city: 'São José do Rio Preto', country: 'Brasil', countryCode: 'BR' },
     { code: 'PNZ', name: 'Aeroporto Senador Nilo Coelho', city: 'Petrolina', country: 'Brasil', countryCode: 'BR' },
     { code: 'OPS', name: 'Aeroporto Presidente João Batista Figueiredo', city: 'Sinop', country: 'Brasil', countryCode: 'BR' },
+    { code: 'UDI', name: 'Aeroporto Ten. Cel. Av. César Bombonato', city: 'Uberlândia', country: 'Brasil', countryCode: 'BR' },
 
     // Estados Unidos
     { code: 'MIA', name: 'Miami International Airport', city: 'Miami', country: 'Estados Unidos', countryCode: 'US' },
