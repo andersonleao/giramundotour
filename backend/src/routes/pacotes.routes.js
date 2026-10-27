@@ -34,6 +34,8 @@ router.use(authMiddleware);
                 "updatedAt"    TIMESTAMP DEFAULT NOW()
             )
         `);
+        // Texto de apresentação da proposta (sai no topo do PDF)
+        await pool.query(`ALTER TABLE pacotes ADD COLUMN IF NOT EXISTS descricao TEXT`);
     } catch (err) {
         console.error('[pacotes] erro ao criar tabela:', err.message);
     }
@@ -81,15 +83,16 @@ router.post('/', async (req, res) => {
                 "clienteId","clienteNome","clienteEmail","clienteTelefone",
                 destino,"nomeViagem","dataPartida","dataRetorno",
                 adultos,criancas,bebes,servicos,subtotal,markup,total,
-                status,observacoes,validade,solicitante
-            ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19)
+                status,observacoes,validade,solicitante,descricao
+            ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20)
             RETURNING *`,
             [
                 b.clienteId||null, b.clienteNome||null, b.clienteEmail||null, b.clienteTelefone||null,
                 b.destino, b.nomeViagem||null, b.dataPartida||null, b.dataRetorno||null,
                 b.adultos||1, b.criancas||0, b.bebes||0,
                 JSON.stringify(b.servicos||[]), b.subtotal||0, b.markup||0, b.total||0,
-                b.status||'orcamento', b.observacoes||null, b.validade||null, b.solicitante||null
+                b.status||'orcamento', b.observacoes||null, b.validade||null, b.solicitante||null,
+                b.descricao||null
             ]
         );
         res.status(201).json({ success: true, data: rows[0] });
@@ -108,15 +111,15 @@ router.put('/:id', async (req, res) => {
                 destino=$5,"nomeViagem"=$6,"dataPartida"=$7,"dataRetorno"=$8,
                 adultos=$9,criancas=$10,bebes=$11,servicos=$12,subtotal=$13,markup=$14,
                 total=$15,status=$16,observacoes=$17,validade=$18,solicitante=$19,
-                "updatedAt"=NOW()
-            WHERE id=$20 RETURNING *`,
+                descricao=$20,"updatedAt"=NOW()
+            WHERE id=$21 RETURNING *`,
             [
                 b.clienteId||null, b.clienteNome||null, b.clienteEmail||null, b.clienteTelefone||null,
                 b.destino, b.nomeViagem||null, b.dataPartida||null, b.dataRetorno||null,
                 b.adultos||1, b.criancas||0, b.bebes||0,
                 JSON.stringify(b.servicos||[]), b.subtotal||0, b.markup||0, b.total||0,
                 b.status||'orcamento', b.observacoes||null, b.validade||null, b.solicitante||null,
-                req.params.id
+                b.descricao||null, req.params.id
             ]
         );
         if (!rows.length) return res.status(404).json({ error: true, message: 'Não encontrado' });

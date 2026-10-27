@@ -185,6 +185,26 @@ const PacotesModule = {
                 </div>
             </div>
 
+            <!-- Descrição / apresentação da proposta -->
+            <div class="col-12">
+                <div class="card border-info">
+                    <div class="card-header bg-info bg-opacity-10 d-flex justify-content-between align-items-center flex-wrap gap-2">
+                        <span class="fw-semibold"><i class="bi bi-file-text me-2"></i>Descrição da Proposta
+                            <small class="text-muted fw-normal ms-1">(texto de apresentação no topo do PDF)</small></span>
+                        <button class="btn btn-sm btn-outline-info" type="button"
+                                title="Monta o texto com cliente, destino, datas, passageiros e serviços já preenchidos"
+                                onclick="PacotesModule.gerarDescricaoPadrao()">
+                            <i class="bi bi-magic me-1"></i>Gerar texto padrão
+                        </button>
+                    </div>
+                    <div class="card-body">
+                        <textarea id="fDescricao" class="form-control" rows="6"
+                                  placeholder="Prezado(a) Senhor(a),&#10;&#10;Em atendimento à solicitação de cotação datada de ..., segue proposta para ..."></textarea>
+                        <small class="text-muted">Preencha os serviços antes de gerar o texto padrão. Depois é só ajustar (ex.: nº do credenciamento/processo, A/C do responsável).</small>
+                    </div>
+                </div>
+            </div>
+
             <!-- Serviços -->
             <div class="col-12">
                 <div class="card border-warning">
@@ -421,7 +441,7 @@ const PacotesModule = {
     _limparForm() {
         ['fClienteId','fClienteNome','fClienteEmail','fClienteTelefone',
          'fDestino','fNomeViagem','fDataPartida','fDataRetorno',
-         'fAdultos','fCriancas','fBebes','fObservacoes','fSolicitante',
+         'fAdultos','fCriancas','fBebes','fObservacoes','fSolicitante','fDescricao',
          'fBuscaCliente'].forEach(id => {
             const el = document.getElementById(id);
             if (el) el.value = id === 'fAdultos' ? '1' : id === 'fCriancas' || id === 'fBebes' ? '0' : '';
@@ -456,6 +476,7 @@ const PacotesModule = {
         set('fValidade',        toDateStr(p.validade));
         set('fSolicitante',     p.solicitante  || '');
         set('fMarkup',          p.markup != null ? +p.markup : 0);
+        set('fDescricao',       p.descricao    || '');
 
         const servicos = Array.isArray(p.servicos) ? p.servicos : [];
         this._servicos = servicos.map(s => this._normalizarServico(s));
@@ -529,6 +550,7 @@ const PacotesModule = {
             observacoes:     document.getElementById('fObservacoes')?.value       || null,
             validade:        document.getElementById('fValidade')?.value          || null,
             solicitante:     document.getElementById('fSolicitante')?.value       || null,
+            descricao:       document.getElementById('fDescricao')?.value?.trim() || null,
         };
 
         try {
@@ -970,6 +992,73 @@ const PacotesModule = {
         set('resumoTotal',     this._fmtMoeda(total));
     },
 
+    // ── Descrição padrão da proposta ─────────────────────────────────
+
+    // Monta a carta de apresentação a partir do que já está no formulário
+    // (cliente, destino, datas, passageiros e serviços). Pede confirmação
+    // antes de sobrescrever um texto já digitado.
+    gerarDescricaoPadrao() {
+        const campo = document.getElementById('fDescricao');
+        if (!campo) return;
+        const aplicar = () => { campo.value = this._montarDescricaoPadrao(); };
+        if (campo.value.trim()) {
+            App.showConfirm('Substituir descrição', 'O texto atual da descrição será substituído pelo texto padrão.', aplicar);
+        } else {
+            aplicar();
+        }
+    },
+
+    _montarDescricaoPadrao() {
+        this._syncServicosFromDOM();
+        const v = id => (document.getElementById(id)?.value || '').trim();
+        const EXTENSO = ['zero','uma','duas','três','quatro','cinco','seis','sete','oito','nove','dez'];
+        const qtd = n => `${String(n).padStart(2, '0')}${EXTENSO[n] ? ` (${EXTENSO[n]})` : ''} ${n === 1 ? 'pessoa' : 'pessoas'}`;
+        const juntar = l => l.length > 1 ? l.slice(0, -1).join(', ') + ' e ' + l[l.length - 1] : (l[0] || '');
+
+        const adultos = +v('fAdultos') || 0, criancas = +v('fCriancas') || 0, bebes = +v('fBebes') || 0;
+        const total = adultos + criancas + bebes || 1;
+        const comp = [];
+        if (adultos)  comp.push(`${adultos} ${adultos === 1 ? 'adulto' : 'adultos'}`);
+        if (criancas) comp.push(`${criancas} ${criancas === 1 ? 'criança' : 'crianças'}`);
+        if (bebes)    comp.push(`${bebes} ${bebes === 1 ? 'bebê' : 'bebês'}`);
+        const pessoas = qtd(total) + (criancas || bebes ? ` (${juntar(comp)})` : '');
+
+        // O que a proposta contempla, a partir dos serviços cadastrados
+        const por = t => this._servicos.filter(s => s.tipo === t);
+        const aereos = por('aereo'), hoteis = por('hotel');
+        const itens = [];
+        if (aereos.length) itens.push(aereos.length > 1 ? 'passagem aérea de ida e volta (classe econômica)' : 'passagem aérea (classe econômica)');
+        if (hoteis.length) {
+            const carac = hoteis.map(h => (h.caracteristicas || '').toLowerCase()).join('\n');
+            let hosp = hoteis.length > 1 ? 'opções de hospedagem' : 'hospedagem';
+            if (carac.includes('all inclusive'))               hosp += ' em regime all inclusive';
+            else if (carac.includes('café da manhã incluso'))  hosp += ' com café da manhã';
+            itens.push(hosp);
+        }
+        if (por('translado').length) itens.push(por('translado').length > 1 ? 'translados' : 'translado');
+        if (por('passeio').length)   itens.push(por('passeio').length > 1 ? 'passeios' : 'passeio');
+        if (por('seguro').length)    itens.push('seguro viagem');
+
+        const destino = v('fDestino');
+        const ida = this._fmtData(v('fDataPartida')), volta = this._fmtData(v('fDataRetorno'));
+        const periodo = ida && volta ? `, no período de ${ida} a ${volta}` : ida ? `, com saída em ${ida}` : '';
+        const contempla = itens.length
+            ? `, contemplando ${juntar(itens)}${destino ? ` em ${destino}` : ''}${periodo}`
+            : `${destino ? ` com destino a ${destino}` : ''}${periodo}`;
+
+        const cliente = v('fClienteNome') || v('fBuscaCliente');
+        return [
+            'Prezado(a) Senhor(a),',
+            '',
+            ...(cliente ? [cliente, ''] : []),
+            `Em atendimento à solicitação de cotação datada de ${this._fmtData(this._dataLocalISO())}, ` +
+            `segue proposta para ${pessoas}${contempla}, conforme detalhado abaixo.`,
+            '',
+            'Os valores apresentados incluem todos os tributos, encargos e taxas aplicáveis, ' +
+            'considerando a tarifa e a disponibilidade vigentes na data desta cotação.',
+        ].join('\n');
+    },
+
     // ── PDF ──────────────────────────────────────────────────────────
 
     async gerarPDF(id) {
@@ -1002,6 +1091,7 @@ const PacotesModule = {
                 observacoes:     document.getElementById('fObservacoes')?.value,
                 validade:        document.getElementById('fValidade')?.value,
                 solicitante:     document.getElementById('fSolicitante')?.value,
+                descricao:       document.getElementById('fDescricao')?.value?.trim(),
                 status:          document.getElementById('fStatus')?.value || 'orcamento',
                 createdAt:       new Date().toISOString(),
             };
@@ -1045,7 +1135,7 @@ const PacotesModule = {
             .replace(/\s*[→⇒➔➜►]\s*/g, ' – ')
             .replace(/[^\x00-\xFF€‚ƒ„…†‡ˆ‰Š‹ŒŽ‘’“”•–—˜™š›œžŸ]/g, '');
         p = { ...p };
-        ['destino', 'nomeViagem', 'clienteNome', 'observacoes', 'solicitante'].forEach(k => { p[k] = limpar(p[k]); });
+        ['destino', 'nomeViagem', 'clienteNome', 'observacoes', 'solicitante', 'descricao'].forEach(k => { p[k] = limpar(p[k]); });
         // Corta o texto em uma linha só, com reticências (usa a fonte atual)
         const cortar = (s, w) => {
             const l = doc.splitTextToSize(String(s || ''), w);
@@ -1298,6 +1388,37 @@ const PacotesModule = {
         txt(`Válida até: ${validade}`,  pw - mg, y + 8, { size: 8, bold: true, cor: NAVY, align: 'right' });
         y += 14;
 
+        // ── Descrição / carta de apresentação (texto justificado) ──
+        if (p.descricao) {
+            const TAM = 9, LH = 4.3;
+            doc.setDrawColor(...LINHA); doc.setLineWidth(0.3);
+            doc.line(mg, y - 2, pw - mg, y - 2);
+            y += 3;
+            fonte(TAM);
+            p.descricao.split(/\r?\n/).forEach(par => {
+                if (!par.trim()) { y += LH * 0.6; return; }
+                const linhas = doc.splitTextToSize(par.trim(), cw);
+                linhas.forEach((linha, k) => {
+                    _checkPage(LH);
+                    fonte(TAM);
+                    doc.setTextColor(...TEXTO);
+                    const palavras = linha.trim().split(/\s+/);
+                    const ultima = k === linhas.length - 1;
+                    if (ultima || palavras.length < 2) {
+                        doc.text(linha.trim(), mg, y);
+                    } else {
+                        // Justifica: distribui a sobra de largura entre as palavras
+                        const larguras = palavras.map(w => doc.getTextWidth(w));
+                        const folga = (cw - larguras.reduce((a, b) => a + b, 0)) / (palavras.length - 1);
+                        let x = mg;
+                        palavras.forEach((w, n) => { doc.text(w, x, y); x += larguras[n] + folga; });
+                    }
+                    y += LH;
+                });
+            });
+            y += 5;
+        }
+
         // ── "Seu pacote inclui" + card de investimento ──
         const precoW = 68, gapCol = 6, inclW = cw - precoW - gapCol;
         const MAX_INCL = 6;
@@ -1310,6 +1431,7 @@ const PacotesModule = {
         const restoIncl = Math.max(0, roteiro.length - MAX_INCL);
         const linhasIncl = Math.max(1, itensIncl.length) + (restoIncl ? 1 : 0);
         const blocoH = Math.max(46, 13 + linhasIncl * 5.6 + 3);
+        _checkPage(blocoH);
 
         doc.setFillColor(...FUNDO);
         doc.roundedRect(mg, y, inclW, blocoH, 3, 3, 'F');
