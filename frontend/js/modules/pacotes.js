@@ -1014,13 +1014,62 @@ const PacotesModule = {
         const { jsPDF } = window.jspdf;
         const doc = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
 
-        const pw  = doc.internal.pageSize.getWidth();
-        const ph  = doc.internal.pageSize.getHeight();
-        const mg  = 20;
-        const cw  = pw - mg * 2;
-        let   y   = 0;
+        const pw     = doc.internal.pageSize.getWidth();
+        const ph     = doc.internal.pageSize.getHeight();
+        const mg     = 20;
+        const cw     = pw - mg * 2;
+        const TOPO   = 54;          // início do conteúdo abaixo do cabeçalho
+        const LIMITE = ph - 26;     // conteúdo não invade o rodapé
+        let   y      = 0;
 
-        // ── Carregar logo ──
+        const NAVY  = [26, 54, 93];
+        const AZUL  = [66, 153, 225];
+        const CINZA = [105, 115, 130];
+        const TEXTO = [40, 45, 55];
+        const LINHA = [222, 228, 238];
+        const FUNDO = [246, 249, 253];
+        const rgb   = h => [1, 3, 5].map(i => parseInt(h.slice(i, i + 2), 16));
+        const tipoInfo = t => this.TIPOS.find(x => x.value === t) || this.TIPOS[5];
+
+        const fonte = (size, estilo = 'normal') => { doc.setFont('helvetica', estilo); doc.setFontSize(size); };
+        const txt = (s, x, yy, o = {}) => {
+            fonte(o.size || 9, o.bold ? 'bold' : (o.italic ? 'italic' : 'normal'));
+            doc.setTextColor(...(o.cor || TEXTO));
+            const opts = { align: o.align || 'left' };
+            if (o.esp) opts.charSpace = o.esp;
+            doc.text(String(s), x, yy, opts);
+        };
+        // A Helvetica do jsPDF só tem os caracteres do WinAnsi: setas e emojis
+        // digitados pelo usuário sairiam como lixo ("!'"), então troca ou remove.
+        const limpar = v => v == null ? v : String(v)
+            .replace(/\s*[→⇒➔➜►]\s*/g, ' – ')
+            .replace(/[^\x00-\xFF€‚ƒ„…†‡ˆ‰Š‹ŒŽ‘’“”•–—˜™š›œžŸ]/g, '');
+        p = { ...p };
+        ['destino', 'nomeViagem', 'clienteNome', 'observacoes', 'solicitante'].forEach(k => { p[k] = limpar(p[k]); });
+        // Corta o texto em uma linha só, com reticências (usa a fonte atual)
+        const cortar = (s, w) => {
+            const l = doc.splitTextToSize(String(s || ''), w);
+            return l.length > 1 ? l[0].replace(/[\s,.;:-]+$/, '') + '...' : (l[0] || '');
+        };
+        const check = (x, yy, cor) => {
+            doc.setDrawColor(...cor); doc.setLineWidth(0.45);
+            doc.line(x, yy - 1.1, x + 0.9, yy);
+            doc.line(x + 0.9, yy, x + 2.6, yy - 2.3);
+        };
+        const opacidade = (v) => { try { doc.setGState(new doc.GState({ opacity: v })); } catch (_) {} };
+
+        const MESES  = ['JAN','FEV','MAR','ABR','MAI','JUN','JUL','AGO','SET','OUT','NOV','DEZ'];
+        const SEMANA = ['Domingo','Segunda','Terça','Quarta','Quinta','Sexta','Sábado'];
+        const partesData = d => {
+            if (!d) return null;
+            const iso = d instanceof Date ? d.toISOString() : String(d);
+            const [a, m, dd] = iso.slice(0, 10).split('-').map(Number);
+            if (!a || !m || !dd) return null;
+            return { dia: dd, mes: MESES[m - 1], ano: a, sem: SEMANA[new Date(a, m - 1, dd).getDay()] };
+        };
+        const plural = (n, s, pl) => `${n} ${n === 1 ? s : (pl || s + 's')}`;
+
+        // ── Logo ──
         let logoB64 = null;
         if (typeof ReportModule !== 'undefined' && ReportModule._logoBase64) {
             logoB64 = ReportModule._logoBase64;
@@ -1038,15 +1087,75 @@ const PacotesModule = {
             });
         }
 
+        // ── Dados ──
+        const servicos = (Array.isArray(p.servicos) ? p.servicos : []).map(s => {
+            const n = this._normalizarServico(s);
+            ['descricao', 'fornecedor', 'caracteristicas'].forEach(k => { n[k] = limpar(n[k]); });
+            return n;
+        });
+        // Roteiro em ordem cronológica; sem data vai para o fim, empate mantém a ordem digitada
+        const roteiro = servicos.map((s, i) => ({ s, i, d: String(s.dataInicio || '').slice(0, 10) }))
+            .sort((a, b) => (!a.d && !b.d) ? a.i - b.i : !a.d ? 1 : !b.d ? -1
+                : a.d < b.d ? -1 : a.d > b.d ? 1 : a.i - b.i)
+            .map(o => o.s);
+
+        const adultos  = +p.adultos  || 0;
+        const criancas = +p.criancas || 0;
+        const bebes    = +p.bebes    || 0;
+        const pax      = adultos + criancas + bebes || 1;
+        const pagantes = adultos + criancas;
+        const total    = +p.total    || 0;
+        const subtotal = +p.subtotal || 0;
+        const markup   = +p.markup   || 0;
+        const noites   = this._calcDiarias(p.dataPartida, p.dataRetorno);
+
+        const dataEmissao = this._fmtData(this._dataLocalISO());
+        // Validade: sempre a data atual (mesmo padrão do relatório de Cotação)
+        const validade    = this._fmtData(this._dataLocalISO());
+        const codigo      = p.id && p.id !== 'preview' ? `#${String(p.id).slice(0, 8).toUpperCase()}` : '#PRÉVIA';
+
+        // ── Fotos: recortadas no canvas no formato exato de cada espaço ──
+        const cardX = mg + 28, cardW = cw - 28, pad = 5, inW = cardW - pad * 2;
+        const FOTO_GAP = 3;
+        const gradeFotos = n => {
+            const cols = n >= 3 ? 3 : 2;
+            const w = (inW - (cols - 1) * FOTO_GAP) / cols;
+            return { cols, w, h: w * 0.64 };
+        };
+        const fotosCard = new Map();     // serviço → fotos já preparadas (até 3)
+        const galeria   = [];            // fotos excedentes, vão para o fim
+        const heroH = 70;
+        const fotoHero = (servicos.find(s => s.tipo === 'hotel' && s.imagens.length)
+                       || servicos.find(s => s.imagens.length))?.imagens[0] || null;
+
+        const galW = (cw - 2 * FOTO_GAP) / 3, galH = galW * 0.66;
+        const [heroImg] = await Promise.all([
+            this._prepararImagemPDF(fotoHero, cw, heroH, { raio: 3, hero: true }),
+            ...servicos.map(async s => {
+                const lista = s.imagens.slice(0, 3);
+                if (lista.length) {
+                    const g = gradeFotos(lista.length);
+                    fotosCard.set(s, (await Promise.all(lista.map(src =>
+                        this._prepararImagemPDF(src, g.w, g.h, { raio: 1.5 })))).filter(Boolean));
+                }
+                const extras = s.imagens.slice(3);
+                if (extras.length) {
+                    const imgs = (await Promise.all(extras.map(src =>
+                        this._prepararImagemPDF(src, galW, galH, { raio: 1.5 })))).filter(Boolean);
+                    if (imgs.length) galeria.push({ s, imgs });
+                }
+            }),
+        ]);
+        // Galeria na mesma ordem do roteiro
+        galeria.sort((a, b) => roteiro.indexOf(a.s) - roteiro.indexOf(b.s));
+
         // Cabeçalho idêntico ao relatório de Cotação (ReportModule.gerarCotacaoPDF)
         const _header = () => {
-            const primaryColor = [26, 54, 93];
-
-            // Fundo do cabeçalho
-            doc.setFillColor(...primaryColor);
+            doc.setFillColor(...NAVY);
             doc.rect(0, 0, pw, 45, 'F');
+            doc.setFillColor(...AZUL);
+            doc.rect(0, 45, pw, 1.2, 'F');
 
-            // Logomarca com fundo branco arredondado para contraste
             if (logoB64) {
                 try {
                     doc.setFillColor(255, 255, 255);
@@ -1055,17 +1164,9 @@ const PacotesModule = {
                 } catch (e) { console.warn('Erro ao adicionar logo no PDF:', e); }
             }
 
-            // Nome da empresa
             const textoX = logoB64 ? mg + 40 : mg;
-            doc.setTextColor(255, 255, 255);
-            doc.setFontSize(24);
-            doc.setFont('helvetica', 'bold');
-            doc.text('GiraMundoTour', textoX, 25);
-
-            // Slogan
-            doc.setFontSize(10);
-            doc.setFont('helvetica', 'normal');
-            doc.text(CONFIG.empresa.slogan, textoX, 33);
+            txt('GiraMundoTour', textoX, 25, { size: 24, bold: true, cor: [255, 255, 255] });
+            txt(CONFIG.empresa.slogan, textoX, 33, { size: 10, cor: [255, 255, 255] });
 
             // Dados da empresa (direita) com ícones de WhatsApp / Instagram
             const contactX = pw - mg;
@@ -1073,338 +1174,506 @@ const PacotesModule = {
             const iconSize = 4;
             const wppIcon = ReportModule._gerarIconeWhatsApp();
             const igIcon  = ReportModule._gerarIconeInstagram();
-
-            // Email
-            doc.setFontSize(8);
-            doc.setFont('helvetica', 'normal');
-            doc.setTextColor(255, 255, 255);
-            doc.text(CONFIG.empresa.email, contactX, contactY, { align: 'right' });
-            contactY += 5.5;
-
-            // WhatsApp telefone 1
-            const tel1Text  = CONFIG.empresa.telefone;
-            const tel1Width = doc.getTextWidth(tel1Text);
-            doc.text(tel1Text, contactX, contactY, { align: 'right' });
-            try { doc.addImage(wppIcon, 'PNG', contactX - tel1Width - iconSize - 1.5, contactY - iconSize + 0.8, iconSize, iconSize); } catch(e) {}
-            contactY += 4.5;
-
-            // WhatsApp telefone 2
-            const tel2Text  = CONFIG.empresa.telefone2;
-            const tel2Width = doc.getTextWidth(tel2Text);
-            doc.setTextColor(255, 255, 255);
-            doc.text(tel2Text, contactX, contactY, { align: 'right' });
-            try { doc.addImage(wppIcon, 'PNG', contactX - tel2Width - iconSize - 1.5, contactY - iconSize + 0.8, iconSize, iconSize); } catch(e) {}
-            contactY += 5.5;
-
-            // Instagram
-            const igText  = CONFIG.empresa.instagram;
-            const igWidth = doc.getTextWidth(igText);
-            doc.setTextColor(255, 255, 255);
-            doc.text(igText, contactX, contactY, { align: 'right' });
-            try { doc.addImage(igIcon, 'PNG', contactX - igWidth - iconSize - 1.5, contactY - iconSize + 0.8, iconSize, iconSize); } catch(e) {}
+            const linhaContato = (texto, icone, passo) => {
+                txt(texto, contactX, contactY, { size: 8, cor: [255, 255, 255], align: 'right' });
+                if (icone) {
+                    const w = doc.getTextWidth(texto);
+                    try { doc.addImage(icone, 'PNG', contactX - w - iconSize - 1.5, contactY - iconSize + 0.8, iconSize, iconSize); } catch (e) {}
+                }
+                contactY += passo;
+            };
+            linhaContato(CONFIG.empresa.email,     null,    5.5);
+            linhaContato(CONFIG.empresa.telefone,  wppIcon, 4.5);
+            linhaContato(CONFIG.empresa.telefone2, wppIcon, 5.5);
+            linhaContato(CONFIG.empresa.instagram, igIcon,  0);
         };
 
-        // Rodapé idêntico ao relatório de Cotação
-        const _footer = () => {
-            const primaryLight = [66, 153, 225];
+        const _footer = (pag, totalPag) => {
             const footerY = ph - 20;
-            doc.setDrawColor(...primaryLight);
+            doc.setDrawColor(...AZUL);
             doc.setLineWidth(0.5);
             doc.line(mg, footerY, pw - mg, footerY);
-
-            doc.setFontSize(8);
-            doc.setFont('helvetica', 'bold');
-            doc.setTextColor(60, 60, 60);
-            doc.text(CONFIG.empresa.nome, mg, footerY + 5);
-            doc.setFont('helvetica', 'normal');
-            doc.setTextColor(100, 100, 100);
-            doc.text('CNPJ: ' + CONFIG.empresa.cnpj, pw - mg, footerY + 5, { align: 'right' });
-
-            const footerContatos = CONFIG.empresa.email + '  |  ' + CONFIG.empresa.telefone + '  |  ' + CONFIG.empresa.telefone2 + '  |  ' + CONFIG.empresa.instagram;
-            doc.setFontSize(7);
-            doc.text(footerContatos, pw / 2, footerY + 10, { align: 'center' });
+            txt(CONFIG.empresa.nome, mg, footerY + 5, { size: 8, bold: true, cor: [60, 60, 60] });
+            txt('CNPJ: ' + CONFIG.empresa.cnpj, pw - mg, footerY + 5, { size: 8, cor: [100, 100, 100], align: 'right' });
+            const contatos = CONFIG.empresa.email + '  |  ' + CONFIG.empresa.telefone + '  |  ' + CONFIG.empresa.telefone2 + '  |  ' + CONFIG.empresa.instagram;
+            txt(contatos, pw / 2, footerY + 10, { size: 7, cor: [100, 100, 100], align: 'center' });
+            txt(`Página ${pag} de ${totalPag}`, pw - mg, footerY + 10, { size: 7, cor: [140, 140, 140], align: 'right' });
         };
 
         const _checkPage = (needed) => {
-            if (y + needed > ph - 25) {
+            if (y + needed > LIMITE) {
                 doc.addPage();
                 _header();
-                y = 55;
+                y = TOPO;
+                return true;
             }
+            return false;
         };
 
-        // ─────────────────────────────────────────────────────────────
+        // Título de seção: barra azul + texto em caixa alta + complemento à direita
+        const secao = (titulo, complemento, minimoDepois = 30) => {
+            _checkPage(14 + minimoDepois);
+            doc.setFillColor(...AZUL);
+            doc.roundedRect(mg, y, 1.6, 7, 0.8, 0.8, 'F');
+            txt(titulo.toUpperCase(), mg + 4.5, y + 5.3, { size: 11.5, bold: true, cor: NAVY, esp: 0.12 });
+            if (complemento) txt(complemento, pw - mg, y + 5.3, { size: 8, cor: CINZA, align: 'right' });
+            y += 12;
+        };
+
+        // ═════════════════════════════════════════════════════════════
         _header();
         y = 52;
 
-        // ── Título da proposta ──
-        doc.setFillColor(232, 244, 255);
-        doc.roundedRect(mg, y, cw, 20, 2, 2, 'F');
-        doc.setFont('helvetica','bold'); doc.setFontSize(13); doc.setTextColor(26, 54, 93);
-        doc.text('PROPOSTA DE PACOTE TURISTICO', pw/2, y + 8, { align:'center' });
-        doc.setFont('helvetica','normal'); doc.setFontSize(8.5); doc.setTextColor(80,80,80);
-        const dataEmissao = this._fmtData(this._dataLocalISO());
-        const codigo = p.id !== 'preview' ? `#${p.id.slice(0,8).toUpperCase()}` : '#PREVIA';
-        // Validade: sempre a data atual (mesmo padrao do relatorio de Cotacao)
-        const validadeStr = '   |   Valido ate: ' + this._fmtData(this._dataLocalISO());
-        doc.text(`Emissao: ${dataEmissao}   |   Codigo: ${codigo}${validadeStr}`, pw/2, y + 15, { align:'center' });
-        y += 25;
-
-        // ── Destino / Viagem ──
-        doc.setFillColor(26, 54, 93);
-        doc.roundedRect(mg, y, cw, 26, 2, 2, 'F');
-        doc.setFont('helvetica','bold'); doc.setFontSize(15); doc.setTextColor(255,255,255);
-        const destinoFit = doc.splitTextToSize(p.destino || '', cw - 60);
-        doc.text(destinoFit[0] || '', mg + 8, y + 11);
-        // Datas no canto direito (mesma linha do destino)
-        const dPar = p.dataPartida ? this._fmtData(p.dataPartida) : '-';
-        const dRet = p.dataRetorno ? this._fmtData(p.dataRetorno) : '-';
-        doc.setFont('helvetica','normal'); doc.setFontSize(9); doc.setTextColor(200,230,255);
-        doc.text(`Período: ${dPar} a ${dRet}`, pw - mg - 4, y + 11, { align:'right' });
-        // Segunda linha: nomeViagem + pax
-        if (p.nomeViagem) {
-            doc.setFont('helvetica','italic'); doc.setFontSize(9.5); doc.setTextColor(200,225,255);
-            doc.text(p.nomeViagem, mg + 8, y + 21);
-        }
-        const pax = (+p.adultos||1) + (+p.criancas||0) + (+p.bebes||0);
-        doc.setFont('helvetica','normal'); doc.setFontSize(9); doc.setTextColor(200,230,255);
-        doc.text(`${pax} passageiro${pax>1?'s':''}`, pw - mg - 4, y + 21, { align:'right' });
-        y += 32;
-
-        // ── Dados do cliente ──
-        if (p.clienteNome || p.clienteEmail || p.clienteTelefone) {
-            _checkPage(20);
-            doc.setFont('helvetica','bold'); doc.setFontSize(10); doc.setTextColor(26, 54, 93);
-            doc.text('CLIENTE', mg, y + 5);
-            doc.setDrawColor(26, 54, 93); doc.setLineWidth(0.3);
-            doc.line(mg + 18, y + 3, pw - mg, y + 3);
-            y += 7.5;
-            doc.setFont('helvetica','normal'); doc.setFontSize(9); doc.setTextColor(40,40,40);
-            if (p.clienteNome)     { doc.text(`Nome: ${p.clienteNome}`,           mg, y);      y += 5; }
-            if (p.clienteEmail)    { doc.text(`E-mail: ${p.clienteEmail}`,        mg, y);      y += 5; }
-            if (p.clienteTelefone) { doc.text(`Telefone: ${p.clienteTelefone}`,   mg, y);      y += 5; }
-            y += 2.5;
+        // ── Capa: foto do destino com o nome da viagem sobreposto ──
+        const heroY = y;
+        if (heroImg) {
+            try { doc.addImage(heroImg, 'JPEG', mg, heroY, cw, heroH); } catch (_) {}
+        } else {
+            doc.setFillColor(...NAVY);
+            doc.roundedRect(mg, heroY, cw, heroH, 3, 3, 'F');
         }
 
-        // ── Passageiros ──
-        _checkPage(12);
-        const linhasPax = [];
-        if (+p.adultos  > 0) linhasPax.push(`${p.adultos} adulto${p.adultos>1?'s':''}`);
-        if (+p.criancas > 0) linhasPax.push(`${p.criancas} criança${p.criancas>1?'s':''}`);
-        if (+p.bebes    > 0) linhasPax.push(`${p.bebes} bebê${p.bebes>1?'s':''}`);
-        doc.setFont('helvetica','bold'); doc.setFontSize(10); doc.setTextColor(26, 54, 93);
-        doc.text('COMPOSIÇÃO', mg, y + 5);
-        doc.line(mg + 32, y + 3, pw - mg, y + 3);
-        y += 7.5;
-        doc.setFont('helvetica','normal'); doc.setFontSize(9); doc.setTextColor(40,40,40);
-        doc.text(linhasPax.join('  |  '), mg, y); y += 6;
-
-        // ── Serviços ──
-        const servicos = Array.isArray(p.servicos) ? p.servicos : [];
-        if (servicos.length) {
-            _checkPage(16);
-            doc.setFont('helvetica','bold'); doc.setFontSize(10); doc.setTextColor(26, 54, 93);
-            doc.text('SERVIÇOS INCLUSOS', mg, y + 5);
-            doc.line(mg + 44, y + 3, pw - mg, y + 3);
-            y += 10;
-
-            // Cabeçalho da tabela
-            // total fixo: tipo(18) + forn(28) + dtI(24) + dtF(24) + total(26) = 120 → desc = cw-120
-            const cols = { tipo:18, desc: cw - 120, forn:28, dtI:24, dtF:24, total:26 };
-            doc.setFillColor(26, 54, 93);
-            doc.rect(mg, y, cw, 7, 'F');
-            doc.setFont('helvetica','bold'); doc.setFontSize(8); doc.setTextColor(255,255,255);
-            let cx = mg + 2;
-            doc.text('Tipo',       cx, y + 5); cx += cols.tipo;
-            doc.text('Descrição',  cx, y + 5); cx += cols.desc;
-            doc.text('Fornecedor', cx, y + 5); cx += cols.forn;
-            doc.text('Início',     cx, y + 5); cx += cols.dtI;
-            doc.text('Fim',        cx, y + 5); cx += cols.dtF;
-            doc.text('Total',      mg + cw - 2, y + 5, { align:'right' });
-            y += 7;
-
-            // Datas no formato dd/mm/yyyy
-            const fmtCurta = (d) => {
-                if (!d) return '—';
-                const iso = (d instanceof Date) ? d.toISOString() : String(d);
-                const s2 = iso.slice(0, 10).split('-');
-                return (s2.length === 3 && s2[0].length === 4) ? `${s2[2]}/${s2[1]}/${s2[0]}` : '—';
-            };
-
-            let rowBg = false;
-            for (const s of servicos) {
-                const tInfo = this.TIPOS.find(t => t.value === s.tipo) || { label: s.tipo };
-
-                // Descrição. Hotel inclui diárias, quartos, pax e tipo de apto.
-                let descTxt = s.descricao || '';
-                if (s.tipo === 'hotel') {
-                    const extras = [];
-                    if (+s.diarias > 0) extras.push(`${+s.diarias} diária${+s.diarias > 1 ? 's' : ''}`);
-                    if (+s.quartos > 0) extras.push(`${+s.quartos} quarto${+s.quartos > 1 ? 's' : ''}`);
-                    if (+s.pessoas > 0) extras.push(`${+s.pessoas} pax`);
-                    if (s.tipoApto)     extras.push(this._labelApto(s.tipoApto));
-                    if (extras.length)  descTxt = (descTxt ? descTxt + ' — ' : '') + extras.join(', ');
-                }
-
-                // A linha cresce conforme descrição, características e fornecedor quebram
-                const descLinhas = doc.splitTextToSize(descTxt || '—', cols.desc - 2);
-                const caracItens  = (s.caracteristicas || '').split('\n').map(l => l.trim()).filter(Boolean);
-                const caracLinhas = caracItens.length
-                    ? doc.splitTextToSize(caracItens.join('   •   '), cols.desc - 3)
-                    : [];
-                const fornLinhas = doc.splitTextToSize(s.fornecedor || '—', cols.forn - 2);
-
-                const linhasColDesc = descLinhas.length + caracLinhas.length;
-                const rowH = Math.max(7, 3 + Math.max(linhasColDesc, fornLinhas.length) * 4);
-                _checkPage(rowH + 2);
-
-                if (rowBg) { doc.setFillColor(245, 248, 255); doc.rect(mg, y, cw, rowH, 'F'); }
-                rowBg = !rowBg;
-
-                doc.setFont('helvetica','normal'); doc.setFontSize(8); doc.setTextColor(40,40,40);
-                cx = mg + 2;
-
-                // Tipo
-                doc.text((tInfo.label||'').substring(0,9), cx, y + 5); cx += cols.tipo;
-
-                // Descrição, seguida das características alinhadas na horizontal
-                let ty = y + 5;
-                descLinhas.forEach(l => { doc.text(l, cx, ty); ty += 4; });
-                if (caracLinhas.length) {
-                    doc.setFontSize(7); doc.setTextColor(95, 105, 120);
-                    caracLinhas.forEach(l => { doc.text(l, cx, ty); ty += 4; });
-                    doc.setFontSize(8); doc.setTextColor(40,40,40);
-                }
-                cx += cols.desc;
-
-                // Fornecedor — quebra linha em vez de cortar
-                let fy = y + 5;
-                fornLinhas.forEach(l => { doc.text(l, cx, fy); fy += 4; });
-                cx += cols.forn;
-
-                doc.text(fmtCurta(s.dataInicio), cx, y + 5); cx += cols.dtI;
-                doc.text(fmtCurta(s.dataFim),    cx, y + 5); cx += cols.dtF;
-
-                doc.setFont('helvetica','bold');
-                doc.text(this._fmtMoeda(+s.valorTotal||0), mg + cw - 2, y + 5, { align:'right' });
-
-                // Linha separadora
-                doc.setDrawColor(210,220,240); doc.setLineWidth(0.2);
-                doc.line(mg, y + rowH, mg + cw, y + rowH);
-                y += rowH;
-            }
-            y += 4;
-        }
-
-        // ── Resumo de valores ──
-        _checkPage((p.markup > 0 ? 28 : 18) + 4);
-        const bW = 80; const bX = pw - mg - bW;
-
-        doc.setFillColor(240, 247, 255);
-        doc.roundedRect(bX, y, bW, p.markup > 0 ? 28 : 18, 2, 2, 'F');
-        doc.setDrawColor(26, 54, 93); doc.setLineWidth(0.3);
-        doc.roundedRect(bX, y, bW, p.markup > 0 ? 28 : 18, 2, 2, 'S');
-
-        doc.setFont('helvetica','normal'); doc.setFontSize(9); doc.setTextColor(60,60,60);
-        let by = y + 7;
-        doc.text('Subtotal:', bX + 4, by);
-        doc.text(this._fmtMoeda(+p.subtotal||0), bX + bW - 4, by, { align:'right' });
-
-        if (p.markup > 0) {
-            by += 6;
-            doc.text(`Markup (${p.markup}%):`, bX + 4, by);
-            doc.text(this._fmtMoeda((+p.subtotal||0) * (+p.markup||0) / 100), bX + bW - 4, by, { align:'right' });
-        }
-
-        by += 6;
-        doc.setFillColor(26, 54, 93);
-        doc.roundedRect(bX, by - 4, bW, 10, 2, 2, 'F');
-        doc.setFont('helvetica','bold'); doc.setFontSize(11); doc.setTextColor(255,255,255);
-        doc.text('TOTAL:', bX + 4, by + 3);
-        doc.text(this._fmtMoeda(+p.total||0), bX + bW - 4, by + 3, { align:'right' });
-        y = by + 14;
-
-        // ── Fotos por serviço ──
-        // Cada serviço pode ter várias fotos; `imagem` é o formato antigo.
-        const servicosComFotos = servicos
-            .map(s => ({ servico: s, lista: Array.isArray(s.imagens) ? s.imagens : (s.imagem ? [s.imagem] : []) }))
-            .filter(sf => sf.lista.length);
-
-        if (servicosComFotos.length) {
-            const gap  = 6;
-            const pad  = 2.5;
-            const cardW = (cw - gap) / 2;   // 2 colunas com gap
-            const imgW  = cardW - pad * 2;
-            const imgH  = imgW * 0.62;        // proporção ~16:10
-            const cardH = imgH + pad * 2;
-
-            for (const { servico, lista } of servicosComFotos) {
-                _checkPage(cardH + 12);
-
-                const tInfo = this.TIPOS.find(t => t.value === servico.tipo) || { label: servico.tipo };
-                const titulo = `${tInfo.label}${servico.descricao ? ' — ' + servico.descricao.substring(0, 45) : ''}`;
-
-                doc.setFont('helvetica','bold'); doc.setFontSize(9.5); doc.setTextColor(26, 54, 93);
-                doc.text(titulo.toUpperCase(), mg, y + 4);
-                doc.setDrawColor(26, 54, 93); doc.setLineWidth(0.25);
-                doc.line(mg, y + 6.5, mg + cw, y + 6.5);
-                y += 11;
-
-                let col = 0;
-                for (const img of lista) {
-                    _checkPage(cardH + 6);
-                    const x = mg + col * (cardW + gap);
-
-                    // Sombra / moldura
-                    doc.setFillColor(220, 230, 245);
-                    doc.roundedRect(x + 1, y + 1, cardW, cardH, 2.5, 2.5, 'F');
-                    doc.setFillColor(255, 255, 255);
-                    doc.roundedRect(x, y, cardW, cardH, 2.5, 2.5, 'F');
-                    doc.setDrawColor(210, 220, 240); doc.setLineWidth(0.2);
-                    doc.roundedRect(x, y, cardW, cardH, 2.5, 2.5, 'S');
-
-                    try {
-                        doc.addImage(img, x + pad, y + pad, imgW, imgH);
-                    } catch (_) {}
-
-                    col++;
-                    if (col === 2) { col = 0; y += cardH + gap; }
-                }
-                if (col === 1) y += cardH + gap;
-                y += 5;
-            }
-        }
-
-        // ── Status ──
+        // Selo com código e status (canto superior direito)
         const stInfo = this.STATUS[p.status] || { label: p.status || 'Orçamento' };
-        doc.setFont('helvetica','normal'); doc.setFontSize(8); doc.setTextColor(100,100,100);
-        doc.text(`Status: ${stInfo.label}${p.solicitante ? '   |   Responsável: ' + p.solicitante : ''}`, mg, y); y += 8;
+        const selo = `${codigo}   •   ${String(stInfo.label).toUpperCase()}`;
+        fonte(7.5, 'bold');
+        const seloW = doc.getTextWidth(selo) + 8;
+        doc.setFillColor(10, 25, 50); opacidade(0.55);
+        doc.roundedRect(pw - mg - 6 - seloW, heroY + 6, seloW, 7, 3.5, 3.5, 'F');
+        opacidade(1);
+        txt(selo, pw - mg - 6 - seloW / 2, heroY + 10.7, { size: 7.5, bold: true, cor: [255, 255, 255], align: 'center' });
 
-        // ── Observações ──
-        if (p.observacoes) {
-            _checkPage(20);
-            doc.setFont('helvetica','bold'); doc.setFontSize(10); doc.setTextColor(26,54,93);
-            doc.text('OBSERVAÇÕES', mg, y + 5);
-            doc.setDrawColor(26,54,93); doc.setLineWidth(0.3);
-            doc.line(mg + 32, y + 3, pw - mg, y + 3);
-            y += 10;
-            doc.setFont('helvetica','normal'); doc.setFontSize(8.5); doc.setTextColor(60,60,60);
-            const linhas = doc.splitTextToSize(p.observacoes, cw);
-            linhas.forEach(l => {
-                _checkPage(6);
-                doc.text(l, mg, y); y += 5.5;
+        // Destino em destaque (reduz a fonte se não couber)
+        const destino = p.destino || 'Sua próxima viagem';
+        let tamDest = 26;
+        fonte(tamDest, 'bold');
+        while (tamDest > 16 && doc.getTextWidth(destino) > cw - 16) { tamDest -= 1; fonte(tamDest, 'bold'); }
+        const baseHero = heroY + heroH - 14;
+        txt('PROPOSTA DE VIAGEM', mg + 8, baseHero - (p.nomeViagem ? 21 : 14), { size: 8, bold: true, cor: [170, 205, 245], esp: 0.5 });
+        fonte(tamDest, 'bold');
+        txt(cortar(destino, cw - 16), mg + 8, baseHero - (p.nomeViagem ? 10 : 3), { size: tamDest, bold: true, cor: [255, 255, 255] });
+        if (p.nomeViagem) {
+            fonte(11, 'italic');
+            txt(cortar(p.nomeViagem, cw - 16), mg + 8, baseHero - 2, { size: 11, italic: true, cor: [220, 232, 250] });
+        }
+
+        // ── Cartões de resumo sobrepostos à capa ──
+        const tiles = [];
+        const dIda = partesData(p.dataPartida), dVolta = partesData(p.dataRetorno);
+        tiles.push({ rot: 'IDA',   val: dIda   ? this._fmtData(p.dataPartida) : '—', sub: dIda?.sem   || '' });
+        tiles.push({ rot: 'VOLTA', val: dVolta ? this._fmtData(p.dataRetorno) : '—', sub: dVolta?.sem || '' });
+        tiles.push({ rot: 'DURAÇÃO', val: noites ? plural(noites, 'noite') : '—', sub: noites ? plural(noites + 1, 'dia') : '' });
+        const comp = [];
+        if (adultos)  comp.push(plural(adultos, 'adulto'));
+        if (criancas) comp.push(plural(criancas, 'criança'));
+        if (bebes)    comp.push(plural(bebes, 'bebê'));
+        tiles.push({ rot: 'VIAJANTES', val: plural(pax, 'pessoa'), sub: comp.join(', ') });
+
+        const tileY = heroY + heroH - 9, tileH = 20, tileGap = 4;
+        const tileX0 = mg + 6, tileW = (cw - 12 - tileGap * 3) / 4;
+        tiles.forEach((t, i) => {
+            const x = tileX0 + i * (tileW + tileGap);
+            doc.setFillColor(205, 214, 228);
+            doc.roundedRect(x + 0.6, tileY + 0.9, tileW, tileH, 2.5, 2.5, 'F');
+            doc.setFillColor(255, 255, 255);
+            doc.roundedRect(x, tileY, tileW, tileH, 2.5, 2.5, 'F');
+            doc.setFillColor(...AZUL);
+            doc.roundedRect(x + 3.5, tileY + 4, 0.9, 12, 0.45, 0.45, 'F');
+            txt(t.rot, x + 6.5, tileY + 6.5, { size: 6.5, bold: true, cor: CINZA, esp: 0.25 });
+            txt(t.val, x + 6.5, tileY + 12.3, { size: 10.5, bold: true, cor: NAVY });
+            if (t.sub) {
+                fonte(7);
+                txt(cortar(t.sub, tileW - 8), x + 6.5, tileY + 16.6, { size: 7, cor: CINZA });
+            }
+        });
+        y = tileY + tileH + 8;
+
+        // ── Para quem / emissão ──
+        if (p.clienteNome) {
+            txt('Preparado especialmente para', mg, y + 3, { size: 7.5, cor: CINZA });
+            fonte(12, 'bold');
+            txt(cortar(p.clienteNome, cw - 70), mg, y + 9, { size: 12, bold: true, cor: NAVY });
+        }
+        txt(`Emissão: ${dataEmissao}`,  pw - mg, y + 3, { size: 8, cor: CINZA, align: 'right' });
+        txt(`Válida até: ${validade}`,  pw - mg, y + 8, { size: 8, bold: true, cor: NAVY, align: 'right' });
+        y += 14;
+
+        // ── "Seu pacote inclui" + card de investimento ──
+        const precoW = 68, gapCol = 6, inclW = cw - precoW - gapCol;
+        const MAX_INCL = 6;
+        const itensIncl = roteiro.slice(0, MAX_INCL).map(s => {
+            const t = tipoInfo(s.tipo);
+            let det = s.descricao || '';
+            if (s.tipo === 'hotel' && +s.diarias > 0) det = (det ? det + ' — ' : '') + plural(+s.diarias, 'diária');
+            return { rot: s.tipo === 'hotel' ? 'Hospedagem' : t.label, det, cor: rgb(t.cor) };
+        });
+        const restoIncl = Math.max(0, roteiro.length - MAX_INCL);
+        const linhasIncl = Math.max(1, itensIncl.length) + (restoIncl ? 1 : 0);
+        const blocoH = Math.max(46, 13 + linhasIncl * 5.6 + 3);
+
+        doc.setFillColor(...FUNDO);
+        doc.roundedRect(mg, y, inclW, blocoH, 3, 3, 'F');
+        txt('SEU PACOTE INCLUI', mg + 6, y + 8, { size: 8, bold: true, cor: NAVY, esp: 0.3 });
+        let iy = y + 15;
+        if (!itensIncl.length) {
+            txt('Serviços a definir', mg + 6, iy, { size: 8.5, italic: true, cor: CINZA });
+        }
+        itensIncl.forEach(it => {
+            doc.setFillColor(...it.cor);
+            doc.circle(mg + 7.3, iy - 1.1, 2, 'F');
+            check(mg + 6, iy - 0.2, [255, 255, 255]);
+            txt(it.rot, mg + 11, iy, { size: 8.5, bold: true, cor: TEXTO });
+            const rw = doc.getTextWidth(it.rot);
+            if (it.det) {
+                fonte(8.5);
+                txt(cortar(it.det, inclW - 17 - rw - 2), mg + 11 + rw + 2, iy, { size: 8.5, cor: CINZA });
+            }
+            iy += 5.6;
+        });
+        if (restoIncl) txt(`+ ${plural(restoIncl, 'serviço')} no roteiro abaixo`, mg + 11, iy, { size: 8, italic: true, cor: CINZA });
+
+        const px = mg + inclW + gapCol;
+        doc.setFillColor(...NAVY);
+        doc.roundedRect(px, y, precoW, blocoH, 3, 3, 'F');
+        txt('INVESTIMENTO TOTAL', px + 6, y + 9, { size: 7.5, bold: true, cor: [170, 205, 245], esp: 0.3 });
+        let tamTotal = 20;
+        fonte(tamTotal, 'bold');
+        const totalTxt = this._fmtMoeda(total);
+        while (tamTotal > 13 && doc.getTextWidth(totalTxt) > precoW - 12) { tamTotal -= 1; fonte(tamTotal, 'bold'); }
+        txt(totalTxt, px + 6, y + 20, { size: tamTotal, bold: true, cor: [255, 255, 255] });
+        let py = y + 26.5;
+        if (pagantes > 1) {
+            txt(`${this._fmtMoeda(total / pagantes)} por pessoa`, px + 6, py, { size: 8.5, cor: [205, 222, 245] });
+            py += 4;
+        }
+        doc.setDrawColor(70, 100, 140); doc.setLineWidth(0.2);
+        doc.line(px + 6, py, px + precoW - 6, py);
+        fonte(6.5);
+        doc.splitTextToSize('Valores em reais (BRL), sujeitos a disponibilidade no momento da reserva.', precoW - 12)
+            .forEach((l, k) => txt(l, px + 6, py + 4.5 + k * 3.2, { size: 6.5, cor: [170, 195, 225] }));
+        y += blocoH + 10;
+
+        // ── Roteiro em linha do tempo ──
+        const lineX = mg + 23;
+
+        // Mede (desenhar=false) ou desenha o card do serviço; devolve a altura
+        const cardServico = (s, y0, desenhar) => {
+            const t     = tipoInfo(s.tipo);
+            const cor   = rgb(t.cor);
+            const hotel = s.tipo === 'hotel';
+            let yy = y0 + pad;
+
+            // Etiqueta do tipo + valor
+            const etiqueta = (hotel ? 'HOSPEDAGEM' : t.label.toUpperCase());
+            fonte(6.8, 'bold');
+            const etW = doc.getTextWidth(etiqueta) + 5;
+            if (desenhar) {
+                doc.setFillColor(...cor);
+                doc.roundedRect(cardX + pad, yy, etW, 5, 2.5, 2.5, 'F');
+                txt(etiqueta, cardX + pad + etW / 2, yy + 3.5, { size: 6.8, bold: true, cor: [255, 255, 255], align: 'center' });
+                if (+s.valorTotal) txt(this._fmtMoeda(+s.valorTotal), cardX + cardW - pad, yy + 3.7, { size: 9.5, bold: true, cor: NAVY, align: 'right' });
+            }
+            yy += 8;
+
+            // Título
+            fonte(11.5, 'bold');
+            const titulo = doc.splitTextToSize(s.descricao || t.label, inW);
+            titulo.forEach(l => {
+                if (desenhar) txt(l, cardX + pad, yy + 4, { size: 11.5, bold: true, cor: TEXTO });
+                yy += 5.2;
+            });
+
+            // Fornecedor + período
+            const ini = this._fmtData(s.dataInicio), fim = this._fmtData(s.dataFim);
+            let periodo = '';
+            if (hotel) periodo = [ini && `Check-in ${ini}`, fim && `Check-out ${fim}`].filter(Boolean).join('   •   ');
+            else if (ini && fim && fim !== ini) periodo = `${ini} a ${fim}`;
+            else periodo = ini || fim || '';
+            const meta = [s.fornecedor, periodo].filter(Boolean).join('   •   ');
+            if (meta) {
+                fonte(8);
+                doc.splitTextToSize(meta, inW).forEach(l => {
+                    if (desenhar) txt(l, cardX + pad, yy + 3.2, { size: 8, cor: CINZA });
+                    yy += 4;
+                });
+            }
+
+            // Hotel: diárias / quartos / hóspedes / apto em "chips"
+            if (hotel) {
+                const chips = [];
+                if (+s.diarias > 0) chips.push(plural(+s.diarias, 'diária'));
+                if (+s.quartos > 0) chips.push(plural(+s.quartos, 'quarto'));
+                if (+s.pessoas > 0) chips.push(plural(+s.pessoas, 'hóspede'));
+                if (s.tipoApto)     chips.push(this._labelApto(s.tipoApto));
+                if (chips.length) {
+                    yy += 2;
+                    fonte(7.5, 'bold');
+                    let cx = cardX + pad;
+                    chips.forEach(c => {
+                        const w = doc.getTextWidth(c) + 5;
+                        if (cx + w > cardX + pad + inW) { cx = cardX + pad; yy += 7; }
+                        if (desenhar) {
+                            doc.setFillColor(255, 243, 228);
+                            doc.roundedRect(cx, yy, w, 5.5, 2.75, 2.75, 'F');
+                            txt(c, cx + w / 2, yy + 3.8, { size: 7.5, bold: true, cor: [175, 90, 15], align: 'center' });
+                        }
+                        cx += w + 2;
+                    });
+                    yy += 5.5;
+                }
+            }
+
+            // Características / o que está incluso — checklist em 2 colunas
+            const itens = (s.caracteristicas || '').split('\n').map(l => l.trim()).filter(Boolean);
+            if (itens.length) {
+                yy += 4;
+                if (desenhar) txt(hotel ? 'COMODIDADES' : 'O QUE ESTÁ INCLUSO', cardX + pad, yy + 2.5, { size: 6.5, bold: true, cor: CINZA, esp: 0.25 });
+                yy += 5.5;
+                const colW = (inW - 4) / 2;
+                fonte(8);
+                for (let k = 0; k < itens.length; k += 2) {
+                    const par = [itens[k], itens[k + 1]].filter(Boolean)
+                        .map(it => doc.splitTextToSize(it, colW - 5));
+                    const h = Math.max(...par.map(l => l.length)) * 3.7;
+                    if (desenhar) {
+                        par.forEach((linhas, c) => {
+                            const x = cardX + pad + c * (colW + 4);
+                            check(x, yy + 2.8, cor);
+                            linhas.forEach((l, n) => txt(l, x + 4.2, yy + 3 + n * 3.7, { size: 8, cor: TEXTO }));
+                        });
+                    }
+                    yy += h + 0.8;
+                }
+            }
+
+            // Fotos (até 3 no card; o restante vai para a galeria)
+            const fotos = fotosCard.get(s) || [];
+            if (fotos.length) {
+                yy += 3;
+                const g = gradeFotos(fotos.length);
+                if (desenhar) {
+                    fotos.forEach((img, k) => {
+                        try { doc.addImage(img, 'JPEG', cardX + pad + k * (g.w + FOTO_GAP), yy, g.w, g.h); } catch (_) {}
+                    });
+                }
+                yy += g.h;
+            }
+
+            return yy + pad - y0;
+        };
+
+        if (roteiro.length) {
+            // Título só fica nesta página se o primeiro card couber junto
+            secao('Roteiro da viagem', plural(roteiro.length, 'serviço'), cardServico(roteiro[0], 0, false));
+            let ultimaData = null;
+            roteiro.forEach((s, idx) => {
+                const h = cardServico(s, y, false);
+                if (_checkPage(h)) ultimaData = null;
+                const y0 = y;
+                const cor = rgb(tipoInfo(s.tipo).cor);
+                const ultimo = idx === roteiro.length - 1;
+
+                // Linha do tempo: trilho + marcador
+                doc.setDrawColor(...LINHA); doc.setLineWidth(0.6);
+                doc.line(lineX, y0 + 7, lineX, ultimo ? y0 + 7 : y0 + h + 6);
+                doc.setFillColor(255, 255, 255);
+                doc.circle(lineX, y0 + 7, 2.8, 'F');
+                doc.setFillColor(...cor);
+                doc.circle(lineX, y0 + 7, 1.9, 'F');
+
+                // Data (omitida quando repete a do serviço anterior)
+                const dt  = partesData(s.dataInicio);
+                const chv = String(s.dataInicio || '').slice(0, 10);
+                if (dt && chv !== ultimaData) {
+                    txt(String(dt.dia).padStart(2, '0'), mg + 9, y0 + 9, { size: 17, bold: true, cor: NAVY, align: 'center' });
+                    txt(`${dt.mes} ${String(dt.ano).slice(2)}`, mg + 9, y0 + 13.5, { size: 7, bold: true, cor: CINZA, align: 'center' });
+                    txt(dt.sem.slice(0, 3).toLowerCase(), mg + 9, y0 + 17.2, { size: 6.5, cor: CINZA, align: 'center' });
+                }
+                ultimaData = chv || ultimaData;
+
+                // Card
+                doc.setFillColor(...FUNDO);
+                doc.roundedRect(cardX + 0.5, y0 + 0.7, cardW, h, 2.5, 2.5, 'F');
+                doc.setFillColor(255, 255, 255);
+                doc.setDrawColor(...LINHA); doc.setLineWidth(0.25);
+                doc.roundedRect(cardX, y0, cardW, h, 2.5, 2.5, 'FD');
+                doc.setFillColor(...cor);
+                doc.roundedRect(cardX, y0, 1.4, h, 0.7, 0.7, 'F');
+                cardServico(s, y0, true);
+
+                y = y0 + h + 6;
+            });
+            y += 2;
+        }
+
+        // ── Galeria de fotos excedentes ──
+        if (galeria.length) {
+            secao('Mais fotos', null, galH + 10);
+            galeria.forEach(({ s, imgs }) => {
+                _checkPage(galH + 9);
+                fonte(8.5, 'bold');
+                txt(cortar(s.descricao || tipoInfo(s.tipo).label, cw), mg, y + 3, { size: 8.5, bold: true, cor: NAVY });
+                y += 6;
+                imgs.forEach((img, k) => {
+                    const col = k % 3;
+                    if (col === 0 && k > 0) { y += galH + FOTO_GAP; _checkPage(galH); }
+                    try { doc.addImage(img, 'JPEG', mg + col * (galW + FOTO_GAP), y, galW, galH); } catch (_) {}
+                });
+                y += galH + 7;
             });
         }
 
-        // ── Footers em todas as páginas ──
+        // ── Resumo de valores ──
+        if (servicos.length) {
+            // Mantém tabela e total juntos quando cabem numa página
+            const resumoH = roteiro.length * 7 + (markup > 0 ? 14 : 2) + 18;
+            secao('Resumo de valores', null, Math.min(resumoH, LIMITE - TOPO - 14));
+            roteiro.forEach((s, k) => {
+                _checkPage(7);
+                const t = tipoInfo(s.tipo);
+                if (k % 2 === 0) { doc.setFillColor(...FUNDO); doc.rect(mg, y, cw, 7, 'F'); }
+                doc.setFillColor(...rgb(t.cor));
+                doc.circle(mg + 4, y + 3.5, 1.2, 'F');
+                txt(s.tipo === 'hotel' ? 'Hospedagem' : t.label, mg + 8, y + 4.8, { size: 8.5, bold: true, cor: TEXTO });
+                fonte(8.5);
+                txt(cortar(s.descricao || '', cw - 75), mg + 34, y + 4.8, { size: 8.5, cor: CINZA });
+                txt(this._fmtMoeda(+s.valorTotal || 0), pw - mg - 4, y + 4.8, { size: 8.5, cor: TEXTO, align: 'right' });
+                y += 7;
+            });
+            y += 2;
+        }
+
+        _checkPage(markup > 0 ? 34 : 26);
+        if (markup > 0) {
+            txt('Subtotal', pw - mg - 50, y + 4, { size: 8.5, cor: CINZA, align: 'right' });
+            txt(this._fmtMoeda(subtotal), pw - mg - 4, y + 4, { size: 8.5, cor: TEXTO, align: 'right' });
+            txt(`Markup (${markup}%)`, pw - mg - 50, y + 9, { size: 8.5, cor: CINZA, align: 'right' });
+            txt(this._fmtMoeda(subtotal * markup / 100), pw - mg - 4, y + 9, { size: 8.5, cor: TEXTO, align: 'right' });
+            y += 12;
+        }
+        doc.setFillColor(...NAVY);
+        doc.roundedRect(mg, y, cw, 12, 2.5, 2.5, 'F');
+        txt('TOTAL DO PACOTE', mg + 6, y + 7.8, { size: 9, bold: true, cor: [255, 255, 255], esp: 0.3 });
+        txt(this._fmtMoeda(total), pw - mg - 6, y + 8.2, { size: 13, bold: true, cor: [255, 255, 255], align: 'right' });
+        y += 12;
+        if (pagantes > 1) {
+            txt(`Equivale a ${this._fmtMoeda(total / pagantes)} por pessoa (${plural(pagantes, 'pagante')})`,
+                pw - mg - 6, y + 5, { size: 7.5, cor: CINZA, align: 'right' });
+            y += 6;
+        }
+        y += 8;
+
+        // ── Observações ──
+        if (p.observacoes) {
+            fonte(8.5);
+            const linhas = doc.splitTextToSize(p.observacoes, cw - 14);
+            const boxH = 14 + linhas.length * 4.6;
+            if (boxH <= LIMITE - TOPO) {
+                _checkPage(boxH);
+                doc.setFillColor(...FUNDO);
+                doc.roundedRect(mg, y, cw, boxH, 2.5, 2.5, 'F');
+                doc.setFillColor(...AZUL);
+                doc.roundedRect(mg, y, 1.4, boxH, 0.7, 0.7, 'F');
+                txt('OBSERVAÇÕES', mg + 7, y + 7, { size: 8, bold: true, cor: NAVY, esp: 0.3 });
+                linhas.forEach((l, k) => txt(l, mg + 7, y + 13 + k * 4.6, { size: 8.5, cor: TEXTO }));
+                y += boxH + 8;
+            } else {
+                // Texto longo demais para uma caixa só: segue em fluxo, quebrando página
+                secao('Observações', null, 10);
+                linhas.forEach(l => { _checkPage(5); txt(l, mg, y, { size: 8.5, cor: TEXTO }); y += 4.6; });
+                y += 6;
+            }
+        }
+
+        // ── Chamada final ──
+        _checkPage(42);
+        doc.setFillColor(232, 244, 255);
+        doc.roundedRect(mg, y, cw, 28, 3, 3, 'F');
+        txt('Vamos tirar essa viagem do papel?', mg + 7, y + 10, { size: 12.5, bold: true, cor: NAVY });
+        fonte(8.5);
+        doc.splitTextToSize('Fale com a gente para confirmar a disponibilidade e garantir estas condições.', cw - 82)
+            .forEach((l, k) => txt(l, mg + 7, y + 16 + k * 4.2, { size: 8.5, cor: TEXTO }));
+        if (p.solicitante) txt(`Seu consultor: ${p.solicitante}`, mg + 7, y + 24.5, { size: 8, bold: true, cor: NAVY });
+
+        const wpp = ReportModule._gerarIconeWhatsApp();
+        const ig  = ReportModule._gerarIconeInstagram();
+        const cxR = pw - mg - 7;
+        [[CONFIG.empresa.telefone, wpp, 9.5], [CONFIG.empresa.telefone2, wpp, 15.5], [CONFIG.empresa.instagram, ig, 21.5]]
+            .forEach(([texto, icone, dy]) => {
+                txt(texto, cxR, y + dy, { size: 9, bold: true, cor: NAVY, align: 'right' });
+                const w = doc.getTextWidth(texto);
+                try { doc.addImage(icone, 'PNG', cxR - w - 5.5, y + dy - 3.4, 4, 4); } catch (_) {}
+            });
+        y += 33;
+
+        fonte(7, 'italic');
+        doc.splitTextToSize(
+            `Proposta válida até ${validade}. Valores e disponibilidade sujeitos a confirmação no momento da reserva; ` +
+            'tarifas aéreas podem sofrer alteração até a emissão dos bilhetes.', cw)
+            .forEach(l => { txt(l, mg, y, { size: 7, italic: true, cor: CINZA }); y += 3.6; });
+
+        // ── Rodapé com numeração em todas as páginas ──
         const totalPages = doc.getNumberOfPages();
         for (let i = 1; i <= totalPages; i++) {
             doc.setPage(i);
-            _footer();
+            _footer(i, totalPages);
         }
 
-        const nome = (p.nomeViagem || p.destino || 'pacote').replace(/\s+/g,'-').toLowerCase();
-        doc.save(`pacote-${nome}-${dataEmissao.replace(/\//g,'-')}.pdf`);
+        const nome = (p.nomeViagem || p.destino || 'pacote').replace(/\s+/g, '-').toLowerCase();
+        doc.save(`pacote-${nome}-${dataEmissao.replace(/\//g, '-')}.pdf`);
+    },
+
+    // Recorta a foto no tamanho exato do espaço no PDF (sem distorcer), com cantos
+    // arredondados. Na capa (hero) escurece a base para o texto branco ficar legível;
+    // sem foto, a capa vira um degradê azul.
+    _prepararImagemPDF(src, wMm, hMm, { raio = 2, hero = false, fundo = '#ffffff' } = {}) {
+        const PX = 6;   // px por mm — nítido impresso sem inflar o PDF
+        const W = Math.round(wMm * PX), H = Math.round(hMm * PX), R = raio * PX;
+
+        const desenhar = (img) => {
+            const c = document.createElement('canvas');
+            c.width = W; c.height = H;
+            const ctx = c.getContext('2d');
+            ctx.fillStyle = fundo;
+            ctx.fillRect(0, 0, W, H);
+            ctx.beginPath();
+            ctx.moveTo(R, 0);
+            ctx.arcTo(W, 0, W, H, R); ctx.arcTo(W, H, 0, H, R);
+            ctx.arcTo(0, H, 0, 0, R); ctx.arcTo(0, 0, W, 0, R);
+            ctx.closePath();
+            ctx.clip();
+
+            if (img) {
+                const esc = Math.max(W / img.width, H / img.height);
+                const iw = img.width * esc, ih = img.height * esc;
+                ctx.drawImage(img, (W - iw) / 2, (H - ih) / 2, iw, ih);
+            } else {
+                const g = ctx.createLinearGradient(0, 0, W, H);
+                g.addColorStop(0, '#1a365d'); g.addColorStop(1, '#2b6cb0');
+                ctx.fillStyle = g;
+                ctx.fillRect(0, 0, W, H);
+                ctx.fillStyle = 'rgba(255,255,255,0.06)';
+                [[0.88, 0.1, 0.32], [0.68, 1.05, 0.26], [0.12, 1.2, 0.22]].forEach(([cx, cy, r]) => {
+                    ctx.beginPath(); ctx.arc(cx * W, cy * H, r * W, 0, Math.PI * 2); ctx.fill();
+                });
+            }
+            if (hero) {
+                const g = ctx.createLinearGradient(0, H * 0.2, 0, H);
+                g.addColorStop(0, 'rgba(10,25,50,0)');
+                g.addColorStop(1, 'rgba(10,25,50,0.85)');
+                ctx.fillStyle = g;
+                ctx.fillRect(0, 0, W, H);
+            }
+            return c.toDataURL('image/jpeg', 0.85);
+        };
+
+        return new Promise(res => {
+            if (!src) { res(hero ? desenhar(null) : null); return; }
+            const img = new Image();
+            img.onload  = () => { try { res(desenhar(img)); } catch (_) { res(hero ? desenhar(null) : null); } };
+            img.onerror = () => res(hero ? desenhar(null) : null);
+            img.src = src;
+        });
     },
 
     // ── Utilitários ──────────────────────────────────────────────────
