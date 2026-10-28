@@ -277,25 +277,25 @@ const MonitoramentoModule = {
 
                             <div class="col-md-3">
                                 <label class="form-label">Ida — De</label>
-                                <input type="date" class="form-control" id="monDataIdaInicio"
+                                <input type="date" class="form-control" id="monDataIdaInicio" data-sem-passado
                                        onchange="MonitoramentoModule._onDateChange('idaInicio')"
                                        value="${m.dataIdaInicio ? String(m.dataIdaInicio).slice(0,10) : ''}" required>
                             </div>
                             <div class="col-md-3">
                                 <label class="form-label">Ida — Até</label>
-                                <input type="date" class="form-control" id="monDataIdaFim"
+                                <input type="date" class="form-control" id="monDataIdaFim" data-sem-passado
                                        onchange="MonitoramentoModule._onDateChange('idaFim')"
                                        value="${m.dataIdaFim ? String(m.dataIdaFim).slice(0,10) : ''}">
                             </div>
                             <div class="col-md-3" id="monVoltaIniWrap">
                                 <label class="form-label">Volta — De</label>
-                                <input type="date" class="form-control" id="monDataVoltaInicio"
+                                <input type="date" class="form-control" id="monDataVoltaInicio" data-sem-passado
                                        onchange="MonitoramentoModule._onDateChange('voltaInicio')"
                                        value="${m.dataVoltaInicio ? String(m.dataVoltaInicio).slice(0,10) : ''}">
                             </div>
                             <div class="col-md-3" id="monVoltaFimWrap">
                                 <label class="form-label">Volta — Até</label>
-                                <input type="date" class="form-control" id="monDataVoltaFim"
+                                <input type="date" class="form-control" id="monDataVoltaFim" data-sem-passado
                                        value="${m.dataVoltaFim ? String(m.dataVoltaFim).slice(0,10) : ''}">
                             </div>
 
@@ -369,6 +369,12 @@ const MonitoramentoModule = {
         if (vVolIni) {
             volFim.min = vVolIni;
             if (volFim.value && volFim.value < vVolIni) volFim.value = vVolIni;
+        }
+
+        // Abre o próximo calendário da sequência (ida até → volta de → volta até), se vazio e visível
+        const proximo = { idaInicio: idaFim, idaFim: volIni, voltaInicio: volFim }[campo];
+        if (proximo && !proximo.value && proximo.offsetParent !== null) {
+            try { proximo.showPicker(); } catch (_) { proximo.focus(); }
         }
     },
 

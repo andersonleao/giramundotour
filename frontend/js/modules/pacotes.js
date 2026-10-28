@@ -147,11 +147,11 @@ const PacotesModule = {
                         </div>
                         <div class="col-md-2">
                             <label class="form-label">Partida</label>
-                            <input type="date" id="fDataPartida" class="form-control">
+                            <input type="date" id="fDataPartida" class="form-control" data-sem-passado>
                         </div>
                         <div class="col-md-2">
                             <label class="form-label">Retorno</label>
-                            <input type="date" id="fDataRetorno" class="form-control">
+                            <input type="date" id="fDataRetorno" class="form-control" data-apos="fDataPartida">
                         </div>
                         <div class="col-md-2">
                             <label class="form-label">Adultos</label>
@@ -176,7 +176,7 @@ const PacotesModule = {
                         </div>
                         <div class="col-md-2">
                             <label class="form-label">Validade</label>
-                            <input type="date" id="fValidade" class="form-control">
+                            <input type="date" id="fValidade" class="form-control" data-sem-passado>
                         </div>
                         <div class="col-md-2">
                             <label class="form-label">Solicitante</label>
@@ -780,12 +780,12 @@ const PacotesModule = {
                 </div>
                 <div class="col-md-2 col-6">
                     <label class="form-label small text-muted mb-1">${ehHotel ? 'Check-in' : 'Início'}</label>
-                    <input type="date" id="svc_dtI_${i}" class="form-control form-control-sm" value="${esc(s.dataInicio).slice(0,10)}"
+                    <input type="date" id="svc_dtI_${i}" class="form-control form-control-sm" data-sem-passado value="${esc(s.dataInicio).slice(0,10)}"
                            onchange="PacotesModule._onServicoChange(${i},'dataInicio',this.value)">
                 </div>
                 <div class="col-md-2 col-6">
                     <label class="form-label small text-muted mb-1">${ehHotel ? 'Check-out' : 'Fim'}</label>
-                    <input type="date" id="svc_dtF_${i}" class="form-control form-control-sm" value="${esc(s.dataFim).slice(0,10)}"
+                    <input type="date" id="svc_dtF_${i}" class="form-control form-control-sm" data-apos="svc_dtI_${i}" value="${esc(s.dataFim).slice(0,10)}"
                            onchange="PacotesModule._onServicoChange(${i},'dataFim',this.value)">
                 </div>
                 <div class="col-md-2 col-6">

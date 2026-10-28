@@ -391,12 +391,12 @@ const HoteisModule = {
                             <div class="row g-3">
                                 <div class="col-md-3">
                                     <label class="form-label fw-bold">Check-in <span class="text-danger">*</span></label>
-                                    <input type="date" class="form-control" id="hotelCheckin"
+                                    <input type="date" class="form-control" id="hotelCheckin" data-sem-passado
                                            value="${h.checkin ? h.checkin.substring(0, 10) : ''}" required>
                                 </div>
                                 <div class="col-md-3">
                                     <label class="form-label fw-bold">Check-out <span class="text-danger">*</span></label>
-                                    <input type="date" class="form-control" id="hotelCheckout"
+                                    <input type="date" class="form-control" id="hotelCheckout" data-apos="hotelCheckin"
                                            value="${h.checkout ? h.checkout.substring(0, 10) : ''}" required>
                                 </div>
                                 <div class="col-md-3">
