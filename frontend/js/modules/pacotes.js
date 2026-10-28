@@ -1054,6 +1054,12 @@ const PacotesModule = {
                 const img = new Image();
                 img.onerror = () => reject(new Error('formato de imagem inválido'));
                 img.onload  = () => {
+                    // Imagem vertical costuma ser print com texto (voo, voucher):
+                    // guarda maior e com menos compressão para continuar legível no PDF
+                    if (img.height > img.width * 0.9) {
+                        maxLado   = Math.max(maxLado, 1800);
+                        qualidade = Math.max(qualidade, 0.92);
+                    }
                     const escala = Math.min(1, maxLado / Math.max(img.width, img.height));
                     const w = Math.round(img.width  * escala);
                     const h = Math.round(img.height * escala);
@@ -1337,16 +1343,35 @@ const PacotesModule = {
                        || hoteis.find(s => s.imagens.length))?.imagens[0] || null;
 
         const galW = (cw - 2 * FOTO_GAP) / 3, galH = galW * 0.66;
+        // Imagem vertical (print de voo, voucher, documento) não pode ser recortada
+        // como foto: sai inteira, na largura do card, abaixo dele.
+        const docsServico = new Map();   // serviço → [{ img, w, h }]
+        const DOC_MAX_H = 170;
         const [heroImg] = await Promise.all([
             this._prepararImagemPDF(fotoHero, cw, heroH, { raio: 3, hero: true }),
             ...servicos.map(async s => {
-                const lista = s.imagens.slice(0, 3);
+                const dims = await Promise.all(s.imagens.map(src => this._dimensoesImagem(src)));
+                const ehDoc = (d) => d && d.h > d.w * 0.9;
+                const docs  = s.imagens.filter((_, k) => ehDoc(dims[k]));
+                const fotosPaisagem = s.imagens.filter((_, k) => !ehDoc(dims[k]));
+                if (docs.length) {
+                    docsServico.set(s, (await Promise.all(docs.map(async (src, k) => {
+                        const d = dims[s.imagens.indexOf(src)];
+                        let w = cardW, h = w * d.h / d.w;
+                        if (h > DOC_MAX_H) { h = DOC_MAX_H; w = h * d.w / d.h; }
+                        // Sem ampliar além da resolução original; JPEG mais alto para texto nítido
+                        const px = Math.min(8, d.w / w);
+                        const img = await this._prepararImagemPDF(src, w, h, { raio: 1, px, qualidade: 0.92 });
+                        return img ? { img, w, h } : null;
+                    }))).filter(Boolean));
+                }
+                const lista = fotosPaisagem.slice(0, 3);
                 if (lista.length) {
                     const g = gradeFotos(lista.length);
                     fotosCard.set(s, (await Promise.all(lista.map(src =>
                         this._prepararImagemPDF(src, g.w, g.h, { raio: 1.5 })))).filter(Boolean));
                 }
-                const extras = roteiro.includes(s) ? s.imagens.slice(3) : [];
+                const extras = roteiro.includes(s) ? fotosPaisagem.slice(3) : [];
                 if (extras.length) {
                     const imgs = (await Promise.all(extras.map(src =>
                         this._prepararImagemPDF(src, galW, galH, { raio: 1.5 })))).filter(Boolean);
@@ -1728,6 +1753,25 @@ const PacotesModule = {
             return yy + pad - y0;
         };
 
+        // Prints/documentos do serviço, inteiros, alinhados ao card (quebram página se preciso)
+        const desenharDocs = (s) => {
+            const docs = docsServico.get(s) || [];
+            docs.forEach(({ img, w, h }) => {
+                // Encolhe um pouco para caber no resto da página em vez de deixá-la vazia
+                const sobra = LIMITE - y - 4;
+                if (h > sobra && sobra >= Math.max(110, h * 0.75)) {
+                    w *= sobra / h;
+                    h = sobra;
+                }
+                _checkPage(h + 4);
+                const x = cardX + (cardW - w) / 2;
+                doc.setDrawColor(...LINHA); doc.setLineWidth(0.3);
+                doc.roundedRect(x - 0.6, y - 0.6, w + 1.2, h + 1.2, 1.5, 1.5, 'S');
+                try { doc.addImage(img, 'JPEG', x, y, w, h); } catch (_) {}
+                y += h + 6;
+            });
+        };
+
         if (roteiro.length) {
             // Título só fica nesta página se o primeiro card couber junto
             secao('Roteiro da viagem', plural(roteiro.length, 'serviço'), cardServico(roteiro[0], 0, false));
@@ -1768,6 +1812,7 @@ const PacotesModule = {
                 cardServico(s, y0, true);
 
                 y = y0 + h + 6;
+                desenharDocs(s);
             });
             y += 2;
         }
@@ -1871,6 +1916,7 @@ const PacotesModule = {
                 doc.roundedRect(cardX, y0, 1.4, hh, 0.7, 0.7, 'F');
                 cardServico(h, y0, true, ex);
                 y = y0 + hh + 6;
+                desenharDocs(h);
             });
             y += 4;
         }
@@ -1935,11 +1981,21 @@ const PacotesModule = {
         doc.save(`pacote-${nome}-${dataEmissao.replace(/\//g, '-')}.pdf`);
     },
 
+    _dimensoesImagem(src) {
+        return new Promise(res => {
+            if (!src) { res(null); return; }
+            const img = new Image();
+            img.onload  = () => res({ w: img.naturalWidth, h: img.naturalHeight });
+            img.onerror = () => res(null);
+            img.src = src;
+        });
+    },
+
     // Recorta a foto no tamanho exato do espaço no PDF (sem distorcer), com cantos
     // arredondados. Na capa (hero) escurece a base para o texto branco ficar legível;
     // sem foto, a capa vira um degradê azul.
-    _prepararImagemPDF(src, wMm, hMm, { raio = 2, hero = false, fundo = '#ffffff' } = {}) {
-        const PX = 6;   // px por mm — nítido impresso sem inflar o PDF
+    _prepararImagemPDF(src, wMm, hMm, { raio = 2, hero = false, fundo = '#ffffff', px = 6, qualidade = 0.85 } = {}) {
+        const PX = px;   // px por mm — 6 deixa foto nítida impressa sem inflar o PDF
         const W = Math.round(wMm * PX), H = Math.round(hMm * PX), R = raio * PX;
 
         const desenhar = (img) => {
@@ -1976,7 +2032,7 @@ const PacotesModule = {
                 ctx.fillStyle = g;
                 ctx.fillRect(0, 0, W, H);
             }
-            return c.toDataURL('image/jpeg', 0.85);
+            return c.toDataURL('image/jpeg', qualidade);
         };
 
         return new Promise(res => {
