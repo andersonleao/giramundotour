@@ -83,6 +83,9 @@ const AIRPORTS = [
     { code: 'OPO', name: 'Porto Airport', city: 'Porto', country: 'Portugal', countryCode: 'PT' },
     { code: 'ZRH', name: 'Zurich Airport', city: 'Zurique', country: 'Suíça', countryCode: 'CH' },
     { code: 'SXB', name: 'Strasbourg Airport', city: 'Estrasburgo', country: 'França', countryCode: 'FR' },
+    { code: 'IST', name: 'Istanbul Airport', city: 'Istambul', country: 'Turquia', countryCode: 'TR', metro: 'Istambul' },
+    { code: 'SAW', name: 'Istanbul Sabiha Gökçen Airport', city: 'Istambul', country: 'Turquia', countryCode: 'TR', metro: 'Istambul' },
+    { code: 'AYT', name: 'Antalya Airport', city: 'Antalya', country: 'Turquia', countryCode: 'TR' },
 
     // América do Sul
     { code: 'EZE', name: 'Aeropuerto Internacional Ezeiza', city: 'Buenos Aires', country: 'Argentina', countryCode: 'AR', metro: 'Buenos Aires' },
