@@ -4,6 +4,7 @@ const PacotesModule = {
     _pacotes:   [],
     _clientes:  [],
     _servicos:  [],   // serviços do formulário atual
+    _fotoCapa:  null, // foto de capa do PDF (dataURL) escolhida pelo usuário
     _editandoId: null,
 
     // ── Tipos de serviço ─────────────────────────────────────────────
@@ -205,6 +206,21 @@ const PacotesModule = {
                 </div>
             </div>
 
+            <!-- Foto de capa do PDF -->
+            <div class="col-12">
+                <div class="card border-secondary">
+                    <div class="card-header bg-secondary bg-opacity-10 fw-semibold">
+                        <i class="bi bi-image me-2"></i>Foto de Capa do PDF
+                        <small class="text-muted fw-normal ms-1">(fundo do destino no topo da proposta)</small>
+                    </div>
+                    <div class="card-body">
+                        <input type="file" id="fCapaArquivo" accept="image/*" class="d-none"
+                               onchange="PacotesModule._onFotoCapa(this)">
+                        <div id="capaPreview"></div>
+                    </div>
+                </div>
+            </div>
+
             <!-- Serviços -->
             <div class="col-12">
                 <div class="card border-warning">
@@ -383,6 +399,7 @@ const PacotesModule = {
         const duplicando = !!opts.duplicar;
         this._editandoId = duplicando ? null : (id || null);
         this._servicos   = [];
+        this._fotoCapa   = null;
 
         const titulo = document.getElementById('modalPacoteTitulo');
         if (titulo) titulo.innerHTML = duplicando
@@ -418,6 +435,7 @@ const PacotesModule = {
         }
 
         this._renderizarServicos();
+        this._renderizarCapa();
         this._recalcular();
 
         const modal = new bootstrap.Modal(document.getElementById('modalPacote'));
@@ -477,6 +495,7 @@ const PacotesModule = {
         set('fSolicitante',     p.solicitante  || '');
         set('fMarkup',          p.markup != null ? +p.markup : 0);
         set('fDescricao',       p.descricao    || '');
+        this._fotoCapa = p.fotoCapa || null;
 
         const servicos = Array.isArray(p.servicos) ? p.servicos : [];
         this._servicos = servicos.map(s => this._normalizarServico(s));
@@ -551,6 +570,7 @@ const PacotesModule = {
             validade:        document.getElementById('fValidade')?.value          || null,
             solicitante:     document.getElementById('fSolicitante')?.value       || null,
             descricao:       document.getElementById('fDescricao')?.value?.trim() || null,
+            fotoCapa:        this._fotoCapa || null,
         };
 
         try {
@@ -877,6 +897,12 @@ const PacotesModule = {
                                 <button class="btn btn-danger p-0 position-absolute"
                                         style="top:-6px;right:-6px;width:18px;height:18px;font-size:10px;line-height:16px;border-radius:50%"
                                         onclick="PacotesModule._removerImagem(${i},${j})" title="Remover foto">&times;</button>
+                                <button class="btn ${img === this._fotoCapa ? 'btn-warning' : 'btn-light'} p-0 position-absolute border"
+                                        style="bottom:3px;left:3px;width:20px;height:20px;font-size:11px;line-height:18px;border-radius:50%"
+                                        onclick="PacotesModule._usarComoCapa(${i},${j})"
+                                        title="${img === this._fotoCapa ? 'Esta é a foto de capa do PDF' : 'Usar como capa do PDF'}">
+                                    <i class="bi bi-star${img === this._fotoCapa ? '-fill' : ''}"></i>
+                                </button>
                             </div>`).join('')}
                         ${imagens.length < this.MAX_IMAGENS ? `
                             <button class="btn btn-outline-secondary d-flex flex-column align-items-center justify-content-center"
@@ -913,6 +939,65 @@ const PacotesModule = {
             ? linhas.filter(l => l.toLowerCase() !== alvo).join('\n')
             : [...linhas, texto].join('\n');
 
+        this._renderizarServicos();
+    },
+
+    // ── Foto de capa ─────────────────────────────────────────────────
+
+    _renderizarCapa() {
+        const box = document.getElementById('capaPreview');
+        if (!box) return;
+        const enviar = `<button class="btn btn-sm btn-outline-primary" type="button"
+                            onclick="document.getElementById('fCapaArquivo').click()">
+                            <i class="bi bi-upload me-1"></i>${this._fotoCapa ? 'Trocar foto' : 'Enviar foto'}
+                        </button>`;
+        box.innerHTML = this._fotoCapa ? `
+            <div class="d-flex flex-wrap gap-3 align-items-center">
+                <img src="${this._fotoCapa}" alt="Capa"
+                     style="width:240px;height:99px;object-fit:cover;border-radius:8px;border:1px solid #dee2e6">
+                <div class="d-flex flex-column gap-2">
+                    ${enviar}
+                    <button class="btn btn-sm btn-outline-danger" type="button" onclick="PacotesModule._removerFotoCapa()">
+                        <i class="bi bi-x-lg me-1"></i>Remover
+                    </button>
+                </div>
+            </div>` : `
+            <div class="d-flex flex-wrap gap-3 align-items-center">
+                ${enviar}
+                <small class="text-muted">Sem foto escolhida, a capa usa a 1ª foto do hotel (ou um fundo azul).
+                    Também dá para clicar na <i class="bi bi-star"></i> de uma foto de serviço.</small>
+            </div>`;
+    },
+
+    async _onFotoCapa(input) {
+        const arq = input.files?.[0];
+        input.value = '';
+        if (!arq || !arq.type.startsWith('image/')) return;
+        try {
+            // A capa ocupa a largura toda da página: guarda um pouco maior que as fotos de serviço
+            this._fotoCapa = await this._redimensionarImagem(arq, 1600, 0.8);
+            this._syncServicosFromDOM();
+            this._renderizarCapa();
+            this._renderizarServicos();
+        } catch (e) {
+            App.showToast(`Não foi possível ler "${arq.name}"`, 'danger');
+        }
+    },
+
+    _usarComoCapa(idx, imgIdx) {
+        const img = this._servicos[idx]?.imagens?.[imgIdx];
+        if (!img) return;
+        this._syncServicosFromDOM();
+        this._fotoCapa = img;
+        this._renderizarCapa();
+        this._renderizarServicos();
+        App.showToast('Foto definida como capa do PDF', 'success');
+    },
+
+    _removerFotoCapa() {
+        this._fotoCapa = null;
+        this._syncServicosFromDOM();
+        this._renderizarCapa();
         this._renderizarServicos();
     },
 
@@ -1117,6 +1202,7 @@ const PacotesModule = {
                 validade:        document.getElementById('fValidade')?.value,
                 solicitante:     document.getElementById('fSolicitante')?.value,
                 descricao:       document.getElementById('fDescricao')?.value?.trim(),
+                fotoCapa:        this._fotoCapa,
                 status:          document.getElementById('fStatus')?.value || 'orcamento',
                 createdAt:       new Date().toISOString(),
             };
@@ -1245,7 +1331,8 @@ const PacotesModule = {
         const fotosCard = new Map();     // serviço → fotos já preparadas (até 3)
         const galeria   = [];            // fotos excedentes, vão para o fim
         const heroH = 70;
-        const fotoHero = (roteiro.find(s => s.tipo === 'hotel' && s.imagens.length)
+        // Capa escolhida no formulário; sem ela, 1ª foto de hotel do orçamento
+        const fotoHero = p.fotoCapa || (roteiro.find(s => s.tipo === 'hotel' && s.imagens.length)
                        || roteiro.find(s => s.imagens.length)
                        || hoteis.find(s => s.imagens.length))?.imagens[0] || null;
 
