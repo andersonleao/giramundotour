@@ -624,7 +624,9 @@ const PacotesModule = {
             diarias:  ehHotel ? 1 : 0,
             quartos:  ehHotel ? 1 : 0,
             pessoas:  ehHotel ? 2 : 0,
-            tipoApto: ehHotel ? 'duplo' : ''
+            tipoApto: ehHotel ? 'duplo' : '',
+            // 2º hotel em diante entra como opção alternativa (fora do total)
+            ...(ehHotel ? { noOrcamento: !this._servicos.some(s => s.tipo === 'hotel' && s.noOrcamento !== false) } : {})
         });
         this._renderizarServicos();
         this._recalcular();
@@ -713,6 +715,7 @@ const PacotesModule = {
     _htmlCardServico(s, i) {
         const tipo    = this.TIPOS.find(t => t.value === s.tipo) || this.TIPOS[5];
         const ehHotel = s.tipo === 'hotel';
+        const foraOrc = ehHotel && s.noOrcamento === false;
         const esc     = v => this._esc(v);
         const imagens = Array.isArray(s.imagens) ? s.imagens : [];
 
@@ -732,8 +735,15 @@ const PacotesModule = {
                        style="min-width:200px" value="${esc(s.descricao)}"
                        placeholder="${ehHotel ? 'Nome do hotel' : 'Descrição do serviço'}"
                        oninput="PacotesModule._onServicoChange(${i},'descricao',this.value)">
-                <span class="badge bg-primary bg-opacity-10 text-primary fw-semibold"
-                      id="svc_badge_${i}">${this._fmtMoeda(+s.valorTotal||0)}</span>
+                ${ehHotel ? `
+                <div class="form-check form-switch mb-0 ms-1" title="Desmarcado: o hotel sai do total e aparece no PDF só como opção alternativa">
+                    <input class="form-check-input" type="checkbox" id="svc_orc_${i}" ${foraOrc ? '' : 'checked'}
+                           onchange="PacotesModule._toggleNoOrcamento(${i}, this.checked)">
+                    <label class="form-check-label small text-nowrap" for="svc_orc_${i}">Incluir no orçamento</label>
+                </div>` : ''}
+                <span class="badge ${foraOrc ? 'bg-secondary bg-opacity-10 text-secondary text-decoration-line-through' : 'bg-primary bg-opacity-10 text-primary'} fw-semibold"
+                      id="svc_badge_${i}" title="${foraOrc ? 'Opção alternativa — não soma no total' : ''}">${this._fmtMoeda(+s.valorTotal||0)}</span>
+                ${foraOrc ? '<span class="badge bg-warning text-dark">Opção</span>' : ''}
                 <button class="btn btn-sm btn-outline-danger" title="Remover serviço"
                         onclick="PacotesModule.removerServico(${i})">
                     <i class="bi bi-trash"></i>
@@ -881,6 +891,15 @@ const PacotesModule = {
         </div>`;
     },
 
+    _toggleNoOrcamento(idx, incluir) {
+        const s = this._servicos[idx];
+        if (!s) return;
+        this._syncServicosFromDOM();
+        s.noOrcamento = !!incluir;
+        this._renderizarServicos();
+        this._recalcular();
+    },
+
     // ── Características ──────────────────────────────────────────────
 
     _toggleCaracteristica(idx, texto) {
@@ -970,8 +989,14 @@ const PacotesModule = {
 
     // ── Cálculos ─────────────────────────────────────────────────────
 
+    // Serviços que entram no total. Hotel com noOrcamento === false é só uma opção
+    // alternativa (pacotes antigos não têm o campo → contam como incluídos).
+    _servicosNoOrcamento(servicos) {
+        return servicos.filter(s => s.tipo !== 'hotel' || s.noOrcamento !== false);
+    },
+
     _calcSubtotal() {
-        return this._servicos.reduce((sum, s) => sum + (+s.valorTotal || 0), 0);
+        return this._servicosNoOrcamento(this._servicos).reduce((sum, s) => sum + (+s.valorTotal || 0), 0);
     },
 
     _calcTotal() {
@@ -1183,8 +1208,13 @@ const PacotesModule = {
             ['descricao', 'fornecedor', 'caracteristicas'].forEach(k => { n[k] = limpar(n[k]); });
             return n;
         });
+        // Hotéis desmarcados ("Incluir no orçamento") não entram no roteiro nem no total:
+        // aparecem só no fim, em "Opções de hospedagem"
+        const noOrcamento = this._servicosNoOrcamento(servicos);
+        const hoteis      = servicos.filter(s => s.tipo === 'hotel');
+        const temOpcoes   = hoteis.length > 1 && hoteis.some(h => !noOrcamento.includes(h));
         // Roteiro em ordem cronológica; sem data vai para o fim, empate mantém a ordem digitada
-        const roteiro = servicos.map((s, i) => ({ s, i, d: String(s.dataInicio || '').slice(0, 10) }))
+        const roteiro = noOrcamento.map((s, i) => ({ s, i, d: String(s.dataInicio || '').slice(0, 10) }))
             .sort((a, b) => (!a.d && !b.d) ? a.i - b.i : !a.d ? 1 : !b.d ? -1
                 : a.d < b.d ? -1 : a.d > b.d ? 1 : a.i - b.i)
             .map(o => o.s);
@@ -1215,8 +1245,9 @@ const PacotesModule = {
         const fotosCard = new Map();     // serviço → fotos já preparadas (até 3)
         const galeria   = [];            // fotos excedentes, vão para o fim
         const heroH = 70;
-        const fotoHero = (servicos.find(s => s.tipo === 'hotel' && s.imagens.length)
-                       || servicos.find(s => s.imagens.length))?.imagens[0] || null;
+        const fotoHero = (roteiro.find(s => s.tipo === 'hotel' && s.imagens.length)
+                       || roteiro.find(s => s.imagens.length)
+                       || hoteis.find(s => s.imagens.length))?.imagens[0] || null;
 
         const galW = (cw - 2 * FOTO_GAP) / 3, galH = galW * 0.66;
         const [heroImg] = await Promise.all([
@@ -1228,7 +1259,7 @@ const PacotesModule = {
                     fotosCard.set(s, (await Promise.all(lista.map(src =>
                         this._prepararImagemPDF(src, g.w, g.h, { raio: 1.5 })))).filter(Boolean));
                 }
-                const extras = s.imagens.slice(3);
+                const extras = roteiro.includes(s) ? s.imagens.slice(3) : [];
                 if (extras.length) {
                     const imgs = (await Promise.all(extras.map(src =>
                         this._prepararImagemPDF(src, galW, galH, { raio: 1.5 })))).filter(Boolean);
@@ -1429,7 +1460,8 @@ const PacotesModule = {
             return { rot: s.tipo === 'hotel' ? 'Hospedagem' : t.label, det, cor: rgb(t.cor) };
         });
         const restoIncl = Math.max(0, roteiro.length - MAX_INCL);
-        const linhasIncl = Math.max(1, itensIncl.length) + (restoIncl ? 1 : 0);
+        const opcoesExtra = temOpcoes ? hoteis.filter(h => !noOrcamento.includes(h)).length : 0;
+        const linhasIncl = Math.max(1, itensIncl.length) + (restoIncl ? 1 : 0) + (opcoesExtra ? 1 : 0);
         const blocoH = Math.max(46, 13 + linhasIncl * 5.6 + 3);
         _checkPage(blocoH);
 
@@ -1452,7 +1484,8 @@ const PacotesModule = {
             }
             iy += 5.6;
         });
-        if (restoIncl) txt(`+ ${plural(restoIncl, 'serviço')} no roteiro abaixo`, mg + 11, iy, { size: 8, italic: true, cor: CINZA });
+        if (restoIncl) { txt(`+ ${plural(restoIncl, 'serviço')} no roteiro abaixo`, mg + 11, iy, { size: 8, italic: true, cor: CINZA }); iy += 5.6; }
+        if (opcoesExtra) txt(`+ ${opcoesExtra === 1 ? '1 outra opção' : opcoesExtra + ' outras opções'} de hospedagem no final`, mg + 11, iy, { size: 8, italic: true, cor: CINZA });
 
         const px = mg + inclW + gapCol;
         doc.setFillColor(...NAVY);
@@ -1479,7 +1512,8 @@ const PacotesModule = {
         const lineX = mg + 23;
 
         // Mede (desenhar=false) ou desenha o card do serviço; devolve a altura
-        const cardServico = (s, y0, desenhar) => {
+        // extra.selo: etiqueta verde ao lado do tipo; extra.rodape: { rot, val, sub } no pé do card
+        const cardServico = (s, y0, desenhar, extra = {}) => {
             const t     = tipoInfo(s.tipo);
             const cor   = rgb(t.cor);
             const hotel = s.tipo === 'hotel';
@@ -1494,6 +1528,13 @@ const PacotesModule = {
                 doc.roundedRect(cardX + pad, yy, etW, 5, 2.5, 2.5, 'F');
                 txt(etiqueta, cardX + pad + etW / 2, yy + 3.5, { size: 6.8, bold: true, cor: [255, 255, 255], align: 'center' });
                 if (+s.valorTotal) txt(this._fmtMoeda(+s.valorTotal), cardX + cardW - pad, yy + 3.7, { size: 9.5, bold: true, cor: NAVY, align: 'right' });
+                if (extra.selo) {
+                    fonte(6.8, 'bold');
+                    const sw = doc.getTextWidth(extra.selo) + 5;
+                    doc.setFillColor(222, 245, 230);
+                    doc.roundedRect(cardX + pad + etW + 2, yy, sw, 5, 2.5, 2.5, 'F');
+                    txt(extra.selo, cardX + pad + etW + 2 + sw / 2, yy + 3.5, { size: 6.8, bold: true, cor: [25, 120, 70], align: 'center' });
+                }
             }
             yy += 8;
 
@@ -1572,13 +1613,29 @@ const PacotesModule = {
             const fotos = fotosCard.get(s) || [];
             if (fotos.length) {
                 yy += 3;
-                const g = gradeFotos(fotos.length);
+                // Nas opções de hospedagem as fotos ficam sempre em 3 colunas (mesma proporção, menores)
+                const g = gradeFotos(extra.rodape ? 3 : fotos.length);
                 if (desenhar) {
                     fotos.forEach((img, k) => {
                         try { doc.addImage(img, 'JPEG', cardX + pad + k * (g.w + FOTO_GAP), yy, g.w, g.h); } catch (_) {}
                     });
                 }
                 yy += g.h;
+            }
+
+            if (extra.rodape) {
+                yy += 4;
+                if (desenhar) {
+                    doc.setFillColor(...FUNDO);
+                    doc.roundedRect(cardX + pad, yy, inW, 11, 2, 2, 'F');
+                    txt(extra.rodape.rot, cardX + pad + 4, yy + 7, { size: 8.5, bold: true, cor: NAVY });
+                    txt(extra.rodape.val, cardX + pad + inW - 4, yy + 7.2, { size: 11, bold: true, cor: NAVY, align: 'right' });
+                    if (extra.rodape.sub) {
+                        const vw = doc.getTextWidth(extra.rodape.val);
+                        txt(extra.rodape.sub, cardX + pad + inW - 8 - vw, yy + 7, { size: 7.5, cor: CINZA, align: 'right' });
+                    }
+                }
+                yy += 11;
             }
 
             return yy + pad - y0;
@@ -1684,6 +1741,52 @@ const PacotesModule = {
             y += 6;
         }
         y += 8;
+
+        // ── Opções de hospedagem: cada hotel com o total do pacote se for o escolhido ──
+        if (temOpcoes) {
+            const fator = 1 + markup / 100;
+            const base  = noOrcamento.filter(s => s.tipo !== 'hotel').reduce((a, s) => a + (+s.valorTotal || 0), 0);
+            const ordem = [...hoteis.filter(h => noOrcamento.includes(h)), ...hoteis.filter(h => !noOrcamento.includes(h))];
+            const extraDe = h => {
+                const tot = (base + (+h.valorTotal || 0)) * fator;
+                return {
+                    selo: noOrcamento.includes(h) ? 'INCLUSA NO ORÇAMENTO' : null,
+                    rodape: {
+                        rot: 'Pacote completo com esta opção',
+                        val: this._fmtMoeda(tot),
+                        sub: pagantes > 1 ? `${this._fmtMoeda(tot / pagantes)} por pessoa` : '',
+                    },
+                };
+            };
+            secao('Opções de hospedagem', plural(ordem.length, 'opção', 'opções'), cardServico(ordem[0], 0, false, extraDe(ordem[0])) + 6);
+            txt('Valor do pacote completo (aéreo e demais serviços) com cada hotel. Escolha a opção de sua preferência.',
+                mg, y - 2, { size: 8, italic: true, cor: CINZA });
+            y += 3;
+            ordem.forEach((h, idx) => {
+                const ex = extraDe(h);
+                const hh = cardServico(h, y, false, ex);
+                _checkPage(hh);
+                const y0 = y;
+                const cor = rgb(tipoInfo('hotel').cor);
+
+                // Número da opção na coluna da esquerda
+                doc.setFillColor(...(ex.selo ? [25, 135, 84] : NAVY));
+                doc.circle(mg + 9, y0 + 8, 5, 'F');
+                txt(String(idx + 1), mg + 9, y0 + 10.2, { size: 12, bold: true, cor: [255, 255, 255], align: 'center' });
+                txt('OPÇÃO', mg + 9, y0 + 17.5, { size: 6.5, bold: true, cor: CINZA, align: 'center' });
+
+                doc.setFillColor(...FUNDO);
+                doc.roundedRect(cardX + 0.5, y0 + 0.7, cardW, hh, 2.5, 2.5, 'F');
+                doc.setFillColor(255, 255, 255);
+                doc.setDrawColor(...(ex.selo ? [25, 135, 84] : LINHA)); doc.setLineWidth(ex.selo ? 0.5 : 0.25);
+                doc.roundedRect(cardX, y0, cardW, hh, 2.5, 2.5, 'FD');
+                doc.setFillColor(...cor);
+                doc.roundedRect(cardX, y0, 1.4, hh, 0.7, 0.7, 'F');
+                cardServico(h, y0, true, ex);
+                y = y0 + hh + 6;
+            });
+            y += 4;
+        }
 
         // ── Observações ──
         if (p.observacoes) {
