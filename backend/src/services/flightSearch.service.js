@@ -442,7 +442,8 @@ class FlightSearchService {
         const voosIda = [];
         const voosVolta = [];
 
-        if (!response || !response.data || !response.data.itineraries) {
+        // Resposta parcial (status incomplete) às vezes traz itineraries como objeto, não lista
+        if (!Array.isArray(response?.data?.itineraries)) {
             return { ida: [], volta: [] };
         }
 
@@ -1335,6 +1336,12 @@ class FlightSearchService {
             console.error('❌ Erro na busca de voos:', error);
             resultado.ida = this.gerarVoosSimulados(params);
             resultado.meta.fonte = 'simulado';
+            if (params.dataVolta) {
+                resultado.volta = this.gerarVoosSimulados({
+                    ...params, origem: params.destino, destino: params.origem, dataIda: params.dataVolta, tipo: 'volta'
+                });
+                resultado.volta.forEach(v => v.tipo = 'volta');
+            }
         }
 
         return resultado;
