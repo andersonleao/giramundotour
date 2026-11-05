@@ -1054,9 +1054,9 @@ const PacotesModule = {
                 const img = new Image();
                 img.onerror = () => reject(new Error('formato de imagem inválido'));
                 img.onload  = () => {
-                    // Imagem vertical costuma ser print com texto (voo, voucher):
+                    // Imagem vertical ou muito larga costuma ser print com texto (voo, voucher):
                     // guarda maior e com menos compressão para continuar legível no PDF
-                    if (img.height > img.width * 0.9) {
+                    if (this._ehPrint(img.width, img.height)) {
                         maxLado   = Math.max(maxLado, 1800);
                         qualidade = Math.max(qualidade, 0.92);
                     }
@@ -1337,21 +1337,26 @@ const PacotesModule = {
         const fotosCard = new Map();     // serviço → fotos já preparadas (até 3)
         const galeria   = [];            // fotos excedentes, vão para o fim
         const heroH = 70;
-        // Capa escolhida no formulário; sem ela, 1ª foto de hotel do orçamento
-        const fotoHero = p.fotoCapa || (roteiro.find(s => s.tipo === 'hotel' && s.imagens.length)
-                       || roteiro.find(s => s.imagens.length)
-                       || hoteis.find(s => s.imagens.length))?.imagens[0] || null;
+        // Capa escolhida no formulário; sem ela, 1ª foto de hotel do orçamento (print não vira capa)
+        let fotoHero = p.fotoCapa || null;
+        if (!fotoHero) {
+            const candidatas = [...roteiro.filter(s => s.tipo === 'hotel'), ...roteiro, ...hoteis].flatMap(s => s.imagens);
+            for (const src of candidatas) {
+                const d = await this._dimensoesImagem(src);
+                if (d && !this._ehPrint(d.w, d.h)) { fotoHero = src; break; }
+            }
+        }
 
         const galW = (cw - 2 * FOTO_GAP) / 3, galH = galW * 0.66;
-        // Imagem vertical (print de voo, voucher, documento) não pode ser recortada
-        // como foto: sai inteira, na largura do card, abaixo dele.
+        // Print (voo, voucher, documento) — vertical ou bem mais largo que uma foto —
+        // não pode ser recortado como foto: sai inteiro, na largura do card, abaixo dele.
         const docsServico = new Map();   // serviço → [{ img, w, h }]
         const DOC_MAX_H = 170;
         const [heroImg] = await Promise.all([
             this._prepararImagemPDF(fotoHero, cw, heroH, { raio: 3, hero: true }),
             ...servicos.map(async s => {
                 const dims = await Promise.all(s.imagens.map(src => this._dimensoesImagem(src)));
-                const ehDoc = (d) => d && d.h > d.w * 0.9;
+                const ehDoc = (d) => d && this._ehPrint(d.w, d.h);
                 const docs  = s.imagens.filter((_, k) => ehDoc(dims[k]));
                 const fotosPaisagem = s.imagens.filter((_, k) => !ehDoc(dims[k]));
                 if (docs.length) {
@@ -1753,6 +1758,13 @@ const PacotesModule = {
             return yy + pad - y0;
         };
 
+        // Espaço extra para o 1º print descer de página junto com o card (print largo é
+        // baixo); print alto que não caberia com o card na mesma página segue sozinho
+        const docJunto = (s) => {
+            const d = (docsServico.get(s) || [])[0];
+            return d && d.h + 6 <= 100 ? d.h + 6 : 0;
+        };
+
         // Prints/documentos do serviço, inteiros, alinhados ao card (quebram página se preciso)
         const desenharDocs = (s) => {
             const docs = docsServico.get(s) || [];
@@ -1774,11 +1786,11 @@ const PacotesModule = {
 
         if (roteiro.length) {
             // Título só fica nesta página se o primeiro card couber junto
-            secao('Roteiro da viagem', plural(roteiro.length, 'serviço'), cardServico(roteiro[0], 0, false));
+            secao('Roteiro da viagem', plural(roteiro.length, 'serviço'), cardServico(roteiro[0], 0, false) + docJunto(roteiro[0]));
             let ultimaData = null;
             roteiro.forEach((s, idx) => {
                 const h = cardServico(s, y, false);
-                if (_checkPage(h)) ultimaData = null;
+                if (_checkPage(h + docJunto(s))) ultimaData = null;
                 const y0 = y;
                 const cor = rgb(tipoInfo(s.tipo).cor);
                 const ultimo = idx === roteiro.length - 1;
@@ -1890,14 +1902,14 @@ const PacotesModule = {
                     },
                 };
             };
-            secao('Opções de hospedagem', plural(ordem.length, 'opção', 'opções'), cardServico(ordem[0], 0, false, extraDe(ordem[0])) + 6);
+            secao('Opções de hospedagem', plural(ordem.length, 'opção', 'opções'), cardServico(ordem[0], 0, false, extraDe(ordem[0])) + docJunto(ordem[0]) + 6);
             txt('Valor do pacote completo (aéreo e demais serviços) com cada hotel. Escolha a opção de sua preferência.',
                 mg, y - 2, { size: 8, italic: true, cor: CINZA });
             y += 3;
             ordem.forEach((h, idx) => {
                 const ex = extraDe(h);
                 const hh = cardServico(h, y, false, ex);
-                _checkPage(hh);
+                _checkPage(hh + docJunto(h));
                 const y0 = y;
                 const cor = rgb(tipoInfo('hotel').cor);
 
@@ -1979,6 +1991,11 @@ const PacotesModule = {
 
         const nome = (p.nomeViagem || p.destino || 'pacote').replace(/\s+/g, '-').toLowerCase();
         doc.save(`pacote-${nome}-${dataEmissao.replace(/\//g, '-')}.pdf`);
+    },
+
+    // Vertical ou mais "deitada" que 2:1 (foto 16:9 = 0,56 continua foto)
+    _ehPrint(w, h) {
+        return h > w * 0.9 || h < w * 0.5;
     },
 
     _dimensoesImagem(src) {
