@@ -1305,11 +1305,8 @@ const PacotesModule = {
         const noOrcamento = this._servicosNoOrcamento(servicos);
         const hoteis      = servicos.filter(s => s.tipo === 'hotel');
         const temOpcoes   = hoteis.length > 1 && hoteis.some(h => !noOrcamento.includes(h));
-        // Roteiro em ordem cronológica; sem data vai para o fim, empate mantém a ordem digitada
-        const roteiro = noOrcamento.map((s, i) => ({ s, i, d: String(s.dataInicio || '').slice(0, 10) }))
-            .sort((a, b) => (!a.d && !b.d) ? a.i - b.i : !a.d ? 1 : !b.d ? -1
-                : a.d < b.d ? -1 : a.d > b.d ? 1 : a.i - b.i)
-            .map(o => o.s);
+        // Roteiro na ordem em que os serviços foram inseridos no formulário
+        const roteiro = noOrcamento;
 
         const adultos  = +p.adultos  || 0;
         const criancas = +p.criancas || 0;
@@ -1890,7 +1887,7 @@ const PacotesModule = {
         if (temOpcoes) {
             const fator = 1 + markup / 100;
             const base  = noOrcamento.filter(s => s.tipo !== 'hotel').reduce((a, s) => a + (+s.valorTotal || 0), 0);
-            const ordem = [...hoteis.filter(h => noOrcamento.includes(h)), ...hoteis.filter(h => !noOrcamento.includes(h))];
+            const ordem = hoteis;   // ordem de inserção; a inclusa no orçamento leva o selo
             const extraDe = h => {
                 const tot = (base + (+h.valorTotal || 0)) * fator;
                 return {
