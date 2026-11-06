@@ -530,6 +530,12 @@ const PacotesModule = {
             if (vUnit !== undefined) s.valorUnit = this._parseMoeda(vUnit);
             const vTot = v(`svc_valorTotal_${i}`);
             if (vTot !== undefined) s.valorTotal = this._parseMoeda(vTot);
+            const txEmb = v(`svc_txEmb_${i}`);
+            if (txEmb !== undefined) s.taxaEmbarque = this._parseMoeda(txEmb);
+            const txServ = v(`svc_txServ_${i}`);
+            if (txServ !== undefined) s.taxaServico = this._parseMoeda(txServ);
+            const naoReemb = document.getElementById(`svc_naoReemb_${i}`);
+            if (naoReemb) s.naoReembolsavel = naoReemb.checked;
             const diarias = v(`svc_diarias_${i}`);
             if (diarias !== undefined) s.diarias = +diarias || 0;
             const quartos = v(`svc_quartos_${i}`);
@@ -641,6 +647,9 @@ const PacotesModule = {
             dataInicio: '', dataFim: '', quantidade: 1,
             valorUnit: 0, valorTotal: 0, obs: '',
             caracteristicas: '', imagens: [],
+            // Aéreo: valorUnit é a tarifa; taxas são por passageiro
+            taxaEmbarque: 0, taxaServico: 0,
+            naoReembolsavel: tipo === 'aereo',
             diarias:  ehHotel ? 1 : 0,
             quartos:  ehHotel ? 1 : 0,
             pessoas:  ehHotel ? 2 : 0,
@@ -661,7 +670,7 @@ const PacotesModule = {
     _onServicoChange(idx, campo, valor) {
         const s = this._servicos[idx];
         if (!s) return;
-        const numFields = ['quantidade', 'valorUnit', 'valorTotal', 'diarias', 'quartos', 'pessoas'];
+        const numFields = ['quantidade', 'valorUnit', 'valorTotal', 'diarias', 'quartos', 'pessoas', 'taxaEmbarque', 'taxaServico'];
         s[campo] = numFields.includes(campo) ? this._parseMoeda(valor) : valor;
 
         // Hotel: calcula diárias automaticamente a partir do check-in → check-out
@@ -676,7 +685,7 @@ const PacotesModule = {
 
         // Só mexe nos valores quando o campo alterado entra na conta. Antes, digitar
         // na descrição já recalculava o total e apagava um valor definido à mão.
-        const afetaValor = ['quantidade','valorUnit','valorTotal','diarias','quartos','dataInicio','dataFim','tipo'];
+        const afetaValor = ['quantidade','valorUnit','valorTotal','diarias','quartos','dataInicio','dataFim','tipo','taxaEmbarque','taxaServico'];
         if (afetaValor.includes(campo)) {
             if (s.tipo === 'hotel') {
                 // Total do hotel = diária × nº de quartos × nº de diárias
@@ -690,12 +699,18 @@ const PacotesModule = {
                     s.valorUnit = div > 0 ? s.valorTotal / div : s.valorTotal;
                 }
             } else {
-                if (campo === 'quantidade' || campo === 'valorUnit') {
-                    s.valorTotal = s.quantidade * s.valorUnit;
+                // Aéreo: total = (tarifa + taxa de embarque + taxa de serviço) × passageiros
+                const taxas = this._taxasAereo(s);
+                if (campo === 'valorTotal') {
+                    s.valorUnit = s.quantidade > 0 ? Math.max(0, s.valorTotal / s.quantidade - taxas) : 0;
+                    const unitEl = document.getElementById(`svc_vUnit_${idx}`);
+                    if (unitEl && taxas) unitEl.value = this._fmtInput(s.valorUnit);
+                } else if (['quantidade', 'valorUnit', 'taxaEmbarque', 'taxaServico'].includes(campo)
+                        // Trocar de/para aéreo liga/desliga as taxas no total
+                        || (campo === 'tipo' && (+s.taxaEmbarque || +s.taxaServico))) {
+                    s.valorTotal = (+s.quantidade || 0) * ((+s.valorUnit || 0) + taxas);
                     const totalEl = document.getElementById(`svc_valorTotal_${idx}`);
                     if (totalEl) totalEl.value = this._fmtInput(s.valorTotal);
-                } else if (campo === 'valorTotal') {
-                    s.valorUnit = s.quantidade > 0 ? s.valorTotal / s.quantidade : 0;
                 }
             }
             const badge = document.getElementById(`svc_badge_${idx}`);
@@ -717,6 +732,11 @@ const PacotesModule = {
         this._recalcular();
     },
 
+    // Taxas por passageiro que somam à tarifa (só no aéreo)
+    _taxasAereo(s) {
+        return s.tipo === 'aereo' ? (+s.taxaEmbarque || 0) + (+s.taxaServico || 0) : 0;
+    },
+
     _renderizarServicos() {
         const box = document.getElementById('listaServicos');
         if (!box) return;
@@ -735,8 +755,17 @@ const PacotesModule = {
     _htmlCardServico(s, i) {
         const tipo    = this.TIPOS.find(t => t.value === s.tipo) || this.TIPOS[5];
         const ehHotel = s.tipo === 'hotel';
+        const ehAereo = s.tipo === 'aereo';
         const foraOrc = ehHotel && s.noOrcamento === false;
         const esc     = v => this._esc(v);
+        const campoMoeda = (id, campo, valor) => `
+                    <div class="input-group input-group-sm">
+                        <span class="input-group-text px-1">R$</span>
+                        <input type="text" id="${id}" class="form-control text-end" inputmode="numeric"
+                               value="${this._fmtInput(+valor||0)}"
+                               oninput="PacotesModule._mascaraMoeda(this)"
+                               onblur="PacotesModule._onServicoChange(${i},'${campo}',this.value)">
+                    </div>`;
         const imagens = Array.isArray(s.imagens) ? s.imagens : [];
 
         // Características já marcadas — usado para destacar as sugestões ativas
@@ -789,7 +818,7 @@ const PacotesModule = {
                            onchange="PacotesModule._onServicoChange(${i},'dataFim',this.value)">
                 </div>
                 <div class="col-md-2 col-6">
-                    <label class="form-label small text-muted mb-1">${ehHotel ? 'Valor da diária' : 'Valor unitário'}</label>
+                    <label class="form-label small text-muted mb-1">${ehHotel ? 'Valor da diária' : ehAereo ? 'Tarifa aérea (por pessoa)' : 'Valor unitário'}</label>
                     <div class="input-group input-group-sm">
                         <span class="input-group-text px-1">R$</span>
                         <input type="text" id="svc_vUnit_${i}" class="form-control text-end" inputmode="numeric"
@@ -851,11 +880,30 @@ const PacotesModule = {
                     </div>
                 </div>` : `
                 <div class="col-md-2 col-6">
-                    <label class="form-label small text-muted mb-1">Quantidade</label>
+                    <label class="form-label small text-muted mb-1">${ehAereo ? 'Passageiros' : 'Quantidade'}</label>
                     <input type="number" id="svc_qtd_${i}" class="form-control form-control-sm text-center"
                            min="1" value="${s.quantidade||1}"
                            onchange="PacotesModule._onServicoChange(${i},'quantidade',this.value)">
-                </div>`}
+                </div>
+                ${ehAereo ? `
+                <div class="col-md-2 col-6">
+                    <label class="form-label small text-muted mb-1">Taxa de embarque</label>
+                    ${campoMoeda(`svc_txEmb_${i}`, 'taxaEmbarque', s.taxaEmbarque)}
+                </div>
+                <div class="col-md-3 col-6">
+                    <label class="form-label small text-muted mb-1">Taxa de serviço, encargos e tributos</label>
+                    ${campoMoeda(`svc_txServ_${i}`, 'taxaServico', s.taxaServico)}
+                </div>
+                <div class="col-md-5 col-12 d-flex flex-column justify-content-end">
+                    <div class="form-check mb-1">
+                        <input class="form-check-input" type="checkbox" id="svc_naoReemb_${i}" ${s.naoReembolsavel !== false ? 'checked' : ''}
+                               onchange="PacotesModule._onServicoChange(${i},'naoReembolsavel',this.checked)">
+                        <label class="form-check-label small" for="svc_naoReemb_${i}">
+                            Tarifa não reembolsável (sai no PDF)
+                        </label>
+                    </div>
+                    <small class="text-muted">Taxas por pessoa · Total = (tarifa + taxas) × passageiros</small>
+                </div>` : ''}`}
 
                 <!-- Características -->
                 <div class="col-12">
@@ -1720,6 +1768,50 @@ const PacotesModule = {
                         });
                     }
                     yy += h + 0.8;
+                }
+            }
+
+            // Aéreo: composição do valor (por passageiro e total) + regra da tarifa
+            if (s.tipo === 'aereo') {
+                const nPax   = +s.quantidade || 1;
+                const linhas = [
+                    ['Tarifa aérea', +s.valorUnit || 0],
+                    ['Taxa de embarque', +s.taxaEmbarque || 0],
+                    ['Taxa de serviço, encargos e tributos', +s.taxaServico || 0],
+                ];
+                if (linhas.some(([, v]) => v > 0)) {
+                    const x0 = cardX + pad, xPax = x0 + inW - 44, xTot = x0 + inW - 3;
+                    yy += 4;
+                    if (desenhar) {
+                        txt('COMPOSIÇÃO DO VALOR', x0, yy + 2.5, { size: 6.5, bold: true, cor: CINZA, esp: 0.25 });
+                        txt('POR PASSAGEIRO', xPax, yy + 2.5, { size: 6.5, bold: true, cor: CINZA, align: 'right' });
+                        txt(`TOTAL (${plural(nPax, 'passageiro').toUpperCase()})`, xTot, yy + 2.5, { size: 6.5, bold: true, cor: CINZA, align: 'right' });
+                    }
+                    yy += 4.5;
+                    linhas.forEach(([rot, v], k) => {
+                        if (desenhar) {
+                            if (k % 2 === 0) { doc.setFillColor(...FUNDO); doc.rect(x0, yy, inW, 6, 'F'); }
+                            txt(rot, x0 + 3, yy + 4.1, { size: 8, cor: TEXTO });
+                            txt(this._fmtMoeda(v), xPax, yy + 4.1, { size: 8, cor: TEXTO, align: 'right' });
+                            txt(this._fmtMoeda(v * nPax), xTot, yy + 4.1, { size: 8, cor: TEXTO, align: 'right' });
+                        }
+                        yy += 6;
+                    });
+                    if (desenhar) {
+                        const tot = +s.valorTotal || 0;
+                        doc.setDrawColor(...NAVY); doc.setLineWidth(0.35);
+                        doc.line(x0, yy, x0 + inW, yy);
+                        txt('VALOR TOTAL DA PASSAGEM AÉREA', x0 + 3, yy + 4.6, { size: 8, bold: true, cor: NAVY });
+                        txt(this._fmtMoeda(tot / nPax), xPax, yy + 4.6, { size: 8, bold: true, cor: NAVY, align: 'right' });
+                        txt(this._fmtMoeda(tot), xTot, yy + 4.6, { size: 8.5, bold: true, cor: NAVY, align: 'right' });
+                    }
+                    yy += 7;
+                }
+                if (s.naoReembolsavel !== false) {
+                    yy += 3;
+                    if (desenhar) txt('Tarifa não reembolsável — não permite alterações ou cancelamentos.',
+                        cardX + pad, yy + 3, { size: 7.8, bold: true, cor: [185, 40, 50] });
+                    yy += 4;
                 }
             }
 
