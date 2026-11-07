@@ -11,10 +11,11 @@ const nodemailer = require('nodemailer');
 const { pool } = require('../config/database');
 const serpApiService = require('./serpapi.service');
 const azulPontosService = require('./azulPontos.service');
+const smilesService = require('./smiles.service');
 const { withPuppeteerLock } = require('./puppeteerMutex');
 
 const SCHEDULE = process.env.MONITORAMENTO_CRON || '0 */3 * * *'; // a cada 3 horas
-const SCHEDULE_PONTOS = process.env.MONITORAMENTO_PONTOS_CRON || '0 6 * * *'; // 1x/dia — Puppeteer é caro
+const SCHEDULE_PONTOS = process.env.MONITORAMENTO_PONTOS_CRON || '0 6,18 * * *'; // 2x/dia — Azul usa Puppeteer (caro)
 
 // ─── Inicialização de tabelas ────────────────────────────────────────────────
 
@@ -67,6 +68,8 @@ async function criarTabelas() {
     await pool.query(`ALTER TABLE monitoramentos ADD COLUMN IF NOT EXISTS solicitante VARCHAR(255)`);
     await pool.query(`ALTER TABLE monitoramentos ADD COLUMN IF NOT EXISTS moeda VARCHAR(20) DEFAULT 'dinheiro'`);
     await pool.query(`ALTER TABLE monitoramentos ADD COLUMN IF NOT EXISTS "ultimoErro" TEXT`);
+    // Programas consultados quando moeda=pontos (ex: "smiles,azul"); NULL = todos
+    await pool.query(`ALTER TABLE monitoramentos ADD COLUMN IF NOT EXISTS programas VARCHAR(100)`);
     await pool.query(`CREATE INDEX IF NOT EXISTS idx_monitoramento_ativo ON monitoramentos(ativo)`);
     await pool.query(`CREATE INDEX IF NOT EXISTS idx_mon_hist_monitoramento ON monitoramento_historico("monitoramentoId")`);
 }
@@ -169,6 +172,22 @@ function linkCompanhia(codigoCia, origem, destino, dataIda, dataVolta) {
     return `${base}?q=${encodeURIComponent(q)}`;
 }
 
+// Link para emitir com pontos no programa do trecho de ida
+function linkPontos(ida, mon, dataIda) {
+    if (ida?.programa === 'azul') {
+        try {
+            return azulPontosService.montarUrl({
+                origem: ida.origem || String(mon.origem).split(',')[0],
+                destino: ida.destino || String(mon.destino).split(',')[0],
+                dataIda: dataIda || mon.dataIdaInicio,
+                adultos: mon.adultos || 1
+            });
+        } catch (_) {}
+        return 'https://www.voeazul.com.br/';
+    }
+    return 'https://www.smiles.com.br/';
+}
+
 function nomeCompanhia(codigo) {
     const map = {
         AD: 'Azul', G3: 'GOL', LA: 'LATAM', JJ: 'LATAM',
@@ -218,7 +237,9 @@ function corpoEmail(mon, novoPreco, precoAnterior, voo) {
     const dataIda   = ida?.partida?.data  || voo?.dataIda   || mon.dataIdaInicio;
     const dataVolta = volta?.partida?.data || voo?.dataVolta || null;
 
-    const linkCia = linkCompanhia(codigoCia, mon.origem, mon.destino, dataIda, dataVolta);
+    const linkCia = mon.moeda === 'pontos'
+        ? linkPontos(ida, mon, dataIda)
+        : linkCompanhia(codigoCia, mon.origem, mon.destino, dataIda, dataVolta);
     const linkGoogle = `https://www.google.com/travel/flights?q=${encodeURIComponent(`Flights from ${mon.origem} to ${mon.destino} on ${dataIda}${dataVolta ? ' returning ' + dataVolta : ''}`)}`;
 
     return `
@@ -254,7 +275,7 @@ function corpoEmail(mon, novoPreco, precoAnterior, voo) {
             <div style="margin-top:22px; text-align:center;">
                 <a href="${linkCia}" target="_blank"
                    style="display:inline-block; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color:#fff; padding:12px 22px; border-radius:50px; text-decoration:none; font-weight:600; margin:4px;">
-                    ✈️ Reservar na ${ciaNome}
+                    ✈️ ${mon.moeda === 'pontos' ? 'Emitir na ' + (NOME_PROGRAMA[ida?.programa] || ciaNome) : 'Reservar na ' + ciaNome}
                 </a>
                 <a href="${linkGoogle}" target="_blank"
                    style="display:inline-block; background:#fff; color:#4a5568; border:1px solid #cbd5e0; padding:12px 22px; border-radius:50px; text-decoration:none; font-weight:600; margin:4px;">
@@ -481,13 +502,85 @@ async function verificarUm(mon) {
     return { ok: true, preco: melhor.preco, baixou: baixouDoAnterior, abaixoDoMaximo, notificou: notificar };
 }
 
-// ─── Verificação de preço em pontos (Azul) ──────────────────────────────────
-// Só a data exata de dataIdaInicio/dataVoltaInicio (sem varrer período) —
-// cada leg já é um lançamento inteiro de Chromium (via withPuppeteerLock),
-// bem mais caro que o caminho em dinheiro (HTTP puro via SerpAPI). Ida e
-// volta são duas buscas one-way separadas, somadas — a Azul não confirmou
-// suportar os dois trechos numa única URL de busca em pontos. Roda num
-// cron separado e mais espaçado.
+// ─── Verificação de preço em pontos (Smiles + Azul) ─────────────────────────
+// Cada programa é consultado por trecho (ida e volta separadas — emissão com
+// milhas é sempre por trecho), e fica o menor valor de cada trecho entre os
+// programas marcados. Assim a ida pode sair pela Smiles e a volta pela Azul.
+//
+// - Smiles: API HTTP (leve) → varre o período de datas (até MAX_DATAS_SMILES por
+//   trecho) e todas as combinações de origem/destino ("GIG,SDU").
+// - Azul: scraping Puppeteer (pesado, e frequentemente barrado pelo Akamai) →
+//   só a data exata e o primeiro aeroporto de cada lado.
+//
+// Smiles devolve milhas POR PASSAGEIRO; multiplicamos por adultos+crianças para
+// o total ficar comparável com a meta. Falha num programa não derruba os
+// outros: vira um aviso "parcial" em "ultimoErro".
+
+const PROGRAMAS_PONTOS = ['smiles', 'azul'];
+const NOME_PROGRAMA = { smiles: 'Smiles (GOL)', azul: 'Azul' };
+const MAX_DATAS_SMILES = 7;
+
+function programasDoMon(mon) {
+    const lista = String(mon.programas || '')
+        .split(',').map(p => p.trim().toLowerCase())
+        .filter(p => PROGRAMAS_PONTOS.includes(p));
+    return lista.length ? [...new Set(lista)] : PROGRAMAS_PONTOS.slice();
+}
+
+function _isoData(d) {
+    if (!d) return null;
+    if (d instanceof Date) return d.toISOString().slice(0, 10);
+    return String(d).slice(0, 10);
+}
+
+function _splitCodes(s) {
+    return String(s || '').split(',').map(x => x.trim().toUpperCase()).filter(Boolean);
+}
+
+const _pausa = ms => new Promise(r => setTimeout(r, ms));
+
+async function _legSmiles(mon, sentido) {
+    const ehVolta = sentido === 'volta';
+    const origens  = _splitCodes(ehVolta ? mon.destino : mon.origem);
+    const destinos = _splitCodes(ehVolta ? mon.origem  : mon.destino);
+    const datas = amostrarDatas(gerarDatasPeriodo(
+        _isoData(ehVolta ? mon.dataVoltaInicio : mon.dataIdaInicio),
+        _isoData(ehVolta ? mon.dataVoltaFim    : mon.dataIdaFim)
+    ), MAX_DATAS_SMILES);
+    const pax = (parseInt(mon.adultos) || 1) + (parseInt(mon.criancas) || 0);
+
+    let melhor = null;
+    let consultas = 0;
+    for (const ori of origens) {
+        for (const des of destinos) {
+            for (const data of datas) {
+                if (consultas++ > 0) await _pausa(400);
+                const r = await smilesService.buscarVoos({
+                    origem: ori, destino: des, dataIda: data,
+                    adultos: mon.adultos || 1, criancas: mon.criancas || 0, bebes: mon.bebes || 0,
+                    classe: mon.classe || 'economica'
+                }).catch(() => null);
+                for (const v of (r?.ida || [])) {
+                    const milhas = v.pontos?.quantidade || 0;
+                    if (!milhas) continue;
+                    const total = milhas * pax;
+                    if (!melhor || total < melhor.pontos) {
+                        const resumo = resumoVoo(v);
+                        resumo.preco = total;
+                        resumo.programa = 'smiles';
+                        melhor = {
+                            ok: true, programa: 'smiles', data,
+                            pontos: total,
+                            taxaBRL: Math.round((v.pontos?.taxaEmbarque || 0) * pax * 100) / 100,
+                            resumo
+                        };
+                    }
+                }
+            }
+        }
+    }
+    return melhor || { ok: false, programa: 'smiles', erro: 'sem_resultados' };
+}
 
 function _resumoLegPontos(origem, destino, data, pontos) {
     return {
@@ -499,55 +592,95 @@ function _resumoLegPontos(origem, destino, data, pontos) {
     };
 }
 
-async function verificarUmPontos(mon) {
-    const agora = new Date();
-    const origem  = String(mon.origem  || '').split(',')[0].trim();
-    const destino = String(mon.destino || '').split(',')[0].trim();
-    const ehIdaVolta = mon.tipoViagem === 'idaVolta' && mon.dataVoltaInicio;
+async function _legAzul(mon, sentido) {
+    const ehVolta = sentido === 'volta';
+    const origem  = _splitCodes(ehVolta ? mon.destino : mon.origem)[0];
+    const destino = _splitCodes(ehVolta ? mon.origem  : mon.destino)[0];
+    const data = _isoData(ehVolta ? mon.dataVoltaInicio : mon.dataIdaInicio);
 
-    const idaResultado = await withPuppeteerLock(() => azulPontosService.buscarPrecoPontos({
-        origem, destino, dataIda: mon.dataIdaInicio, adultos: mon.adultos || 1
+    const r = await withPuppeteerLock(() => azulPontosService.buscarPrecoPontos({
+        origem, destino, dataIda: data, adultos: mon.adultos || 1
     })).catch(err => ({ ok: false, erro: err.message }));
 
-    if (!idaResultado.ok) {
+    if (!r.ok) return { ok: false, programa: 'azul', erro: r.erro || 'falhou' };
+    return {
+        ok: true, programa: 'azul', data,
+        pontos: r.pontos,
+        taxaBRL: r.taxaBRL || 0,
+        resumo: { ..._resumoLegPontos(origem, destino, data, r.pontos), programa: 'azul' }
+    };
+}
+
+async function _legPrograma(programa, mon, sentido) {
+    try {
+        return programa === 'smiles' ? await _legSmiles(mon, sentido) : await _legAzul(mon, sentido);
+    } catch (err) {
+        return { ok: false, programa, erro: err.message };
+    }
+}
+
+function _menorLeg(resultados) {
+    return resultados.filter(r => r.ok).reduce((m, r) => (!m || r.pontos < m.pontos) ? r : m, null);
+}
+
+async function verificarUmPontos(mon) {
+    const agora = new Date();
+    const ehIdaVolta = mon.tipoViagem === 'idaVolta' && !!mon.dataVoltaInicio;
+    const programas = programasDoMon(mon);
+
+    const idaRes = [];
+    const voltaRes = [];
+    for (const prog of programas) {
+        idaRes.push(await _legPrograma(prog, mon, 'ida'));
+        if (ehIdaVolta) voltaRes.push(await _legPrograma(prog, mon, 'volta'));
+    }
+
+    const falhas = [
+        ...idaRes.filter(r => !r.ok).map(r => `${r.programa} ida: ${r.erro}`),
+        ...voltaRes.filter(r => !r.ok).map(r => `${r.programa} volta: ${r.erro}`)
+    ];
+
+    const melhorIda = _menorLeg(idaRes);
+    const melhorVolta = ehIdaVolta ? _menorLeg(voltaRes) : null;
+
+    if (!melhorIda || (ehIdaVolta && !melhorVolta)) {
+        const erro = falhas.join(' | ') || 'sem_resultados';
         await pool.query(
             `UPDATE monitoramentos SET "ultimaVerificacao"=$1, "ultimoErro"=$2, "updatedAt"=$1 WHERE id=$3`,
-            [agora, `ida: ${idaResultado.erro || 'falhou'}`, mon.id]
+            [agora, erro, mon.id]
         );
-        console.warn(`[Monitoramento ${mon.id}] pontos Azul (ida) falhou:`, idaResultado.erro);
-        return { ok: false, reason: idaResultado.erro || 'falhou' };
+        console.warn(`[Monitoramento ${mon.id}] pontos falhou:`, erro);
+        return { ok: false, reason: erro };
     }
 
-    let voltaResultado = null;
-    if (ehIdaVolta) {
-        voltaResultado = await withPuppeteerLock(() => azulPontosService.buscarPrecoPontos({
-            origem: destino, destino: origem, dataIda: mon.dataVoltaInicio, adultos: mon.adultos || 1
-        })).catch(err => ({ ok: false, erro: err.message }));
-
-        if (!voltaResultado.ok) {
-            await pool.query(
-                `UPDATE monitoramentos SET "ultimaVerificacao"=$1, "ultimoErro"=$2, "updatedAt"=$1 WHERE id=$3`,
-                [agora, `volta: ${voltaResultado.erro || 'falhou'}`, mon.id]
-            );
-            console.warn(`[Monitoramento ${mon.id}] pontos Azul (volta) falhou:`, voltaResultado.erro);
-            return { ok: false, reason: voltaResultado.erro || 'falhou' };
-        }
+    // Resumo por programa (total do próprio programa, quando achou todos os trechos)
+    const porPrograma = {};
+    for (const prog of programas) {
+        const i = idaRes.find(r => r.programa === prog);
+        const v = voltaRes.find(r => r.programa === prog);
+        porPrograma[prog] = {
+            ida: i?.ok ? i.pontos : null,
+            volta: ehIdaVolta ? (v?.ok ? v.pontos : null) : null,
+            total: (i?.ok && (!ehIdaVolta || v?.ok)) ? i.pontos + (v?.pontos || 0) : null,
+            erro: [i && !i.ok ? `ida: ${i.erro}` : null, v && !v.ok ? `volta: ${v.erro}` : null]
+                .filter(Boolean).join(', ') || null
+        };
     }
 
-    const totalPontos = idaResultado.pontos + (voltaResultado?.pontos || 0);
-    const totalTaxaBRL = (idaResultado.taxaBRL || 0) + (voltaResultado?.taxaBRL || 0);
-
+    const progsUsados = [...new Set([melhorIda.programa, melhorVolta?.programa].filter(Boolean))];
     const melhor = {
-        preco: totalPontos,
-        companhia: 'Azul',
-        dataIda: mon.dataIdaInicio,
-        dataVolta: ehIdaVolta ? mon.dataVoltaInicio : null,
-        taxaBRL: totalTaxaBRL || undefined,
+        preco: melhorIda.pontos + (melhorVolta?.pontos || 0),
+        companhia: progsUsados.map(p => NOME_PROGRAMA[p]).join(' + '),
+        programas: progsUsados,
+        dataIda: melhorIda.data,
+        dataVolta: melhorVolta?.data || null,
+        taxaBRL: ((melhorIda.taxaBRL || 0) + (melhorVolta?.taxaBRL || 0)) || undefined,
         moeda: 'pontos',
+        porPrograma,
         detalhes: {
-            ida: _resumoLegPontos(mon.origem, mon.destino, mon.dataIdaInicio, idaResultado.pontos),
-            volta: ehIdaVolta ? _resumoLegPontos(mon.destino, mon.origem, mon.dataVoltaInicio, voltaResultado.pontos) : null,
-            fonte: 'azul_pontos_scrape'
+            ida: melhorIda.resumo,
+            volta: melhorVolta ? melhorVolta.resumo : null,
+            fonte: progsUsados.length === 1 ? `${progsUsados[0]}_pontos` : 'pontos_misto'
         }
     };
 
@@ -560,16 +693,18 @@ async function verificarUmPontos(mon) {
     await pool.query(
         `INSERT INTO monitoramento_historico ("monitoramentoId", preco, companhia, "dataIda", "dataVolta", detalhes)
          VALUES ($1, $2, $3, $4, $5, $6)`,
-        [mon.id, melhor.preco, melhor.companhia, melhor.dataIda, melhor.dataVolta, JSON.stringify(melhor.detalhes)]
+        [mon.id, melhor.preco, melhor.companhia, melhor.dataIda, melhor.dataVolta,
+         JSON.stringify({ ...melhor.detalhes, porPrograma })]
     );
 
     const precoInicial = mon.precoInicial != null ? +mon.precoInicial : melhor.preco;
+    const avisoParcial = falhas.length ? `parcial — ${falhas.join(' | ')}` : null;
     await pool.query(
         `UPDATE monitoramentos
             SET "precoAtual"=$1, "precoInicial"=COALESCE("precoInicial", $2),
-                "melhorVoo"=$3, "ultimaVerificacao"=$4, "updatedAt"=$4, "ultimoErro"=NULL
-          WHERE id=$5`,
-        [melhor.preco, precoInicial, JSON.stringify(melhor), agora, mon.id]
+                "melhorVoo"=$3, "ultimaVerificacao"=$4, "updatedAt"=$4, "ultimoErro"=$5
+          WHERE id=$6`,
+        [melhor.preco, precoInicial, JSON.stringify(melhor), agora, avisoParcial, mon.id]
     );
 
     if (notificar) {
@@ -584,7 +719,7 @@ async function verificarUmPontos(mon) {
         }
     }
 
-    return { ok: true, preco: melhor.preco, baixou: baixouDoAnterior, abaixoDoMaximo, notificou: notificar };
+    return { ok: true, preco: melhor.preco, porPrograma, parcial: avisoParcial, baixou: baixouDoAnterior, abaixoDoMaximo, notificou: notificar };
 }
 
 async function verificarTodosPontos() {
@@ -646,4 +781,4 @@ async function iniciar() {
     console.log(`[Monitoramento] Cron de pontos agendado: ${SCHEDULE_PONTOS}`);
 }
 
-module.exports = { iniciar, verificarTodos, verificarTodosPontos, verificarUm, verificarUmPontos, criarTabelas };
+module.exports = { programasDoMon, iniciar, verificarTodos, verificarTodosPontos, verificarUm, verificarUmPontos, criarTabelas };

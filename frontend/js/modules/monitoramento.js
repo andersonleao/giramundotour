@@ -136,7 +136,7 @@ const MonitoramentoModule = {
                 ? new Date(m.ultimaVerificacao).toLocaleString('pt-BR')
                 : '<span class="text-muted">Nunca</span>';
             const erroIcon = m.ultimoErro
-                ? ` <i class="bi bi-exclamation-triangle-fill text-warning" title="Última verificação falhou: ${this._escape(m.ultimoErro)}"></i>`
+                ? ` <i class="bi bi-exclamation-triangle-fill text-warning" title="${String(m.ultimoErro).startsWith('parcial') ? 'Algum programa falhou (preço veio dos demais): ' : 'Última verificação falhou: '}${this._escape(m.ultimoErro)}"></i>`
                 : '';
 
             return `
@@ -149,7 +149,7 @@ const MonitoramentoModule = {
                     <td><small>${m.clienteTelefone || '<span class="text-muted">-</span>'}</small></td>
                     <td><small>${m.solicitante || '<span class="text-muted">-</span>'}</small></td>
                     <td><strong>${m.origem} → ${m.destino}</strong><br>
-                        <small class="text-muted">${m.tipoViagem === 'idaVolta' ? 'Ida e Volta' : 'Somente Ida'} • ${m.adultos}adl${m.moeda === 'pontos' ? ' • <span class="badge bg-info text-dark">Pontos</span>' : ''}</small>
+                        <small class="text-muted">${m.tipoViagem === 'idaVolta' ? 'Ida e Volta' : 'Somente Ida'} • ${m.adultos}adl${m.moeda === 'pontos' ? ` • <span class="badge bg-info text-dark">Pontos: ${this._programasLabel(m)}</span>` : ''}</small>
                     </td>
                     <td>${periodoIda}</td>
                     <td>${periodoVolta}</td>
@@ -310,7 +310,7 @@ const MonitoramentoModule = {
                                 <label class="form-label">Moeda</label>
                                 <select class="form-select" id="monMoeda" onchange="MonitoramentoModule._toggleMoeda()">
                                     <option value="dinheiro" ${m.moeda !== 'pontos' ? 'selected' : ''}>Dinheiro (R$)</option>
-                                    <option value="pontos" ${m.moeda === 'pontos' ? 'selected' : ''}>Pontos Azul</option>
+                                    <option value="pontos" ${m.moeda === 'pontos' ? 'selected' : ''}>Pontos / milhas</option>
                                 </select>
                                 <small class="text-muted" id="monMoedaAjuda"></small>
                             </div>
@@ -319,6 +319,10 @@ const MonitoramentoModule = {
                                 <input type="number" step="0.01" class="form-control" id="monPrecoAlvo"
                                        value="${m.precoAlvo || ''}" placeholder="Ex: 1500" required>
                                 <small class="text-muted">Notifica ao encontrar valor menor</small>
+                            </div>
+                            <div class="col-md-12" id="monProgramasWrap" style="display:none;">
+                                <label class="form-label d-block">Programas consultados</label>
+                                ${this._programasCheckboxes(m)}
                             </div>
                             <div class="col-md-6">
                                 <label class="form-label">Observações</label>
@@ -427,9 +431,11 @@ const MonitoramentoModule = {
         }
         if (ajuda) {
             ajuda.textContent = pontos
-                ? `Verificação 1x/dia, na${tipoViagem === 'idaVolta' ? 's datas exatas informadas (ida + volta somados)' : ' data exata informada'}.`
+                ? `Verificação 2x/dia (6h e 18h). Total para todos os passageiros${tipoViagem === 'idaVolta' ? ', ida + volta somadas' : ''}.`
                 : '';
         }
+        const wrap = document.getElementById('monProgramasWrap');
+        if (wrap) wrap.style.display = pontos ? '' : 'none';
         this._toggleVolta();
     },
 
@@ -465,6 +471,7 @@ const MonitoramentoModule = {
             adultos:   parseInt(document.getElementById('monAdultos').value) || 1,
             classe:    document.getElementById('monClasse').value,
             moeda:     document.getElementById('monMoeda').value,
+            programas: Array.from(document.querySelectorAll('.mon-programa:checked')).map(c => c.value).join(','),
             precoAlvo: document.getElementById('monPrecoAlvo').value || null,
             emailDestino: document.getElementById('monEmailDestino').value.trim() || 'giramundotourag@gmail.com',
             observacoes:  document.getElementById('monObservacoes').value.trim() || null
@@ -538,6 +545,52 @@ const MonitoramentoModule = {
         return n.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
     },
 
+    _PROGRAMAS: { smiles: 'Smiles (GOL)', azul: 'Azul' },
+
+    // Vazio/NULL = todos os programas (mesma regra do backend)
+    _programasDoMon(m) {
+        const l = String(m?.programas || '').split(',').map(p => p.trim()).filter(p => this._PROGRAMAS[p]);
+        return l.length ? l : Object.keys(this._PROGRAMAS);
+    },
+
+    _programasLabel(m) {
+        return this._programasDoMon(m).map(p => (p === 'smiles' ? 'Smiles' : 'Azul')).join(' + ');
+    },
+
+    _programasCheckboxes(m) {
+        const sel = this._programasDoMon(m);
+        const itens = Object.entries(this._PROGRAMAS).map(([k, nome]) => `
+            <div class="form-check form-check-inline">
+                <input class="form-check-input mon-programa" type="checkbox" id="monProg_${k}" value="${k}" ${sel.includes(k) ? 'checked' : ''}>
+                <label class="form-check-label" for="monProg_${k}">${nome}</label>
+            </div>`).join('');
+        return `${itens}
+            <div class="form-check form-check-inline">
+                <input class="form-check-input" type="checkbox" disabled>
+                <label class="form-check-label text-muted">LATAM Pass <small>(em breve)</small></label>
+            </div>
+            <small class="text-muted d-block">Smiles varre o período de datas informado; Azul consulta só a data exata e pode ser bloqueada pelo site.</small>`;
+    },
+
+    _porProgramaHtml(mv, m) {
+        const pp = mv?.porPrograma;
+        if (m.moeda !== 'pontos' || !pp) return '';
+        const idaVolta = m.tipoViagem === 'idaVolta';
+        const fmt = v => (v != null ? this._fmtValor(v, 'pontos') : '<span class="text-muted">—</span>');
+        const linhas = Object.entries(pp).map(([k, r]) => `
+            <tr>
+                <td>${this._escape(this._PROGRAMAS[k] || k)}</td>
+                <td>${fmt(r.ida)}</td>
+                ${idaVolta ? `<td>${fmt(r.volta)}</td>` : ''}
+                <td><strong>${fmt(r.total)}</strong>${r.erro ? ` <i class="bi bi-exclamation-triangle-fill text-warning" title="${this._escape(r.erro)}"></i>` : ''}</td>
+            </tr>`).join('');
+        return `
+            <table class="table table-sm mb-3">
+                <thead><tr><th>Programa</th><th>Ida</th>${idaVolta ? '<th>Volta</th>' : ''}<th>Total</th></tr></thead>
+                <tbody>${linhas}</tbody>
+            </table>`;
+    },
+
     _fmtValor(v, moeda) {
         if (moeda === 'pontos') {
             const n = parseInt(v) || 0;
@@ -596,7 +649,7 @@ const MonitoramentoModule = {
                     <div class="card-body py-2">
                         <div class="d-flex justify-content-between align-items-start">
                             <div>
-                                <div class="text-uppercase small text-muted">${titulo}</div>
+                                <div class="text-uppercase small text-muted">${titulo}${v.programa ? ' · ' + this._escape(this._PROGRAMAS[v.programa] || v.programa) : ''}</div>
                                 <div class="fw-bold"><i class="bi bi-airplane"></i> ${this._escape(cia)}${num}</div>
                                 <div class="text-muted small">${rota}</div>
                             </div>
@@ -618,7 +671,10 @@ const MonitoramentoModule = {
             kiwi: 'Kiwi',
             skyscanner: 'SkyScanner',
             simulado: 'Simulado',
-            azul_pontos_scrape: 'Azul (pontos)'
+            azul_pontos_scrape: 'Azul (pontos)',
+            azul_pontos: 'Azul (pontos)',
+            smiles_pontos: 'Smiles (milhas)',
+            pontos_misto: 'Smiles + Azul'
         }[mv.detalhes?.fonte] || (mv.detalhes?.fonte || '');
 
         const totalHtml = `
@@ -648,6 +704,7 @@ const MonitoramentoModule = {
                         </div>
                         <div class="modal-body">
                             ${totalHtml}
+                            ${this._porProgramaHtml(mv, m)}
                             ${renderVoo(ida,   m.tipoViagem === 'idaVolta' ? 'Ida' : 'Voo')}
                             ${volta ? renderVoo(volta, 'Volta') : ''}
                             ${m.ultimaVerificacao ? `

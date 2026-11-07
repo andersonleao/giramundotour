@@ -37,6 +37,14 @@ router.get('/:id/historico', async (req, res) => {
     }
 });
 
+// Programas de pontos aceitos (moeda='pontos'); string vazia/inválida → NULL (= todos)
+function normalizarProgramas(v) {
+    const lista = (Array.isArray(v) ? v : String(v || '').split(','))
+        .map(p => String(p).trim().toLowerCase())
+        .filter(p => ['smiles', 'azul'].includes(p));
+    return lista.length ? [...new Set(lista)].join(',') : null;
+}
+
 // POST — cria
 router.post('/', async (req, res) => {
     try {
@@ -56,8 +64,8 @@ router.post('/', async (req, res) => {
                 origem, destino, "tipoViagem",
                 "dataIdaInicio", "dataIdaFim", "dataVoltaInicio", "dataVoltaFim",
                 adultos, criancas, bebes, classe,
-                "precoAlvo", "emailDestino", ativo, observacoes, solicitante, moeda
-            ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21)
+                "precoAlvo", "emailDestino", ativo, observacoes, solicitante, moeda, programas
+            ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22)
             RETURNING *`,
             [
                 b.clienteId || null,
@@ -80,7 +88,8 @@ router.post('/', async (req, res) => {
                 b.ativo !== false,
                 b.observacoes || null,
                 b.solicitante || null,
-                b.moeda === 'pontos' ? 'pontos' : 'dinheiro'
+                b.moeda === 'pontos' ? 'pontos' : 'dinheiro',
+                normalizarProgramas(b.programas)
             ]
         );
         res.status(201).json(rows[0]);
@@ -104,13 +113,14 @@ router.put('/:id', async (req, res) => {
             dataVoltaInicio: '"dataVoltaInicio"', dataVoltaFim: '"dataVoltaFim"',
             adultos: 'adultos', criancas: 'criancas', bebes: 'bebes', classe: 'classe',
             precoAlvo: '"precoAlvo"', emailDestino: '"emailDestino"', ativo: 'ativo', observacoes: 'observacoes',
-            solicitante: 'solicitante', moeda: 'moeda'
+            solicitante: 'solicitante', moeda: 'moeda', programas: 'programas'
         };
         for (const key of Object.keys(map)) {
             if (key in b) {
                 campos.push(`${map[key]}=$${i++}`);
                 let val = b[key];
                 if (key === 'origem' || key === 'destino') val = String(val).toUpperCase();
+                if (key === 'programas') val = normalizarProgramas(val);
                 if (key === 'precoAlvo') val = val === '' || val == null ? null : parseFloat(val);
                 valores.push(val);
             }
