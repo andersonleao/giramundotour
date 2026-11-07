@@ -903,8 +903,8 @@ const PacotesModule = {
                                     <label class="form-label small text-muted mb-1">Taxas do cartão</label>
                                     <select id="svc_cartao_${i}" class="form-select form-select-sm"
                                             onchange="PacotesModule._onServicoChange(${i},'cartaoModalidade',this.value)">
-                                        <option value="presencial" ${s.cartaoModalidade !== 'mercadopago' ? 'selected' : ''}>Maquininha (presencial)</option>
-                                        <option value="mercadopago" ${s.cartaoModalidade === 'mercadopago' ? 'selected' : ''}>Link Mercado Pago</option>
+                                        <option value="presencial" ${s.cartaoModalidade === 'presencial' ? 'selected' : ''}>Maquininha (presencial)</option>
+                                        <option value="mercadopago" ${s.cartaoModalidade !== 'presencial' ? 'selected' : ''}>Link Mercado Pago</option>
                                     </select>
                                 </div>
                                 <div class="col-md-4 col-6">
@@ -2270,7 +2270,7 @@ const PacotesModule = {
     // Parcelamento no cartão com as mesmas taxas da Cotação (quotation.js):
     // TAXAS_CARTAO (maquininha) ou TAXAS_MP (link Mercado Pago), 1x a 10x.
     _parcelamento(valor, modalidade, max) {
-        const tabela = modalidade === 'mercadopago'
+        const tabela = modalidade !== 'presencial'
             ? (typeof TAXAS_MP !== 'undefined' ? TAXAS_MP : [])
             : (typeof TAXAS_CARTAO !== 'undefined' ? TAXAS_CARTAO : []);
         const n = Math.min(Math.max(+max || 10, 1), tabela.length || 1);
