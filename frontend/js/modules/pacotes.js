@@ -7,6 +7,11 @@ const PacotesModule = {
     _fotoCapa:  null, // foto de capa do PDF (dataURL) escolhida pelo usuário
     _editandoId: null,
 
+    // Seção "Roteiro da viagem" (cards de cada serviço + prints + galeria de fotos)
+    // desligada temporariamente a pedido do usuário (repetia os valores quando há
+    // várias opções de hotel). Para voltar a exibir, basta trocar para true.
+    MOSTRAR_ROTEIRO: false,
+
     // ── Tipos de serviço ─────────────────────────────────────────────
     TIPOS: [
         { value: 'aereo',     label: 'Aéreo',     icon: 'bi-airplane',      cor: '#0d6efd' },
@@ -536,6 +541,12 @@ const PacotesModule = {
             if (txServ !== undefined) s.taxaServico = this._parseMoeda(txServ);
             const naoReemb = document.getElementById(`svc_naoReemb_${i}`);
             if (naoReemb) s.naoReembolsavel = naoReemb.checked;
+            const pag = document.getElementById(`svc_pag_${i}`);
+            if (pag) s.mostrarPagamento = pag.checked;
+            const cartao = v(`svc_cartao_${i}`);
+            if (cartao !== undefined) s.cartaoModalidade = cartao;
+            const parc = v(`svc_parc_${i}`);
+            if (parc !== undefined) s.parcelasMax = +parc || 10;
             const diarias = v(`svc_diarias_${i}`);
             if (diarias !== undefined) s.diarias = +diarias || 0;
             const quartos = v(`svc_quartos_${i}`);
@@ -670,7 +681,7 @@ const PacotesModule = {
     _onServicoChange(idx, campo, valor) {
         const s = this._servicos[idx];
         if (!s) return;
-        const numFields = ['quantidade', 'valorUnit', 'valorTotal', 'diarias', 'quartos', 'pessoas', 'taxaEmbarque', 'taxaServico'];
+        const numFields = ['quantidade', 'valorUnit', 'valorTotal', 'diarias', 'quartos', 'pessoas', 'taxaEmbarque', 'taxaServico', 'parcelasMax'];
         s[campo] = numFields.includes(campo) ? this._parseMoeda(valor) : valor;
 
         // Hotel: calcula diárias automaticamente a partir do check-in → check-out
@@ -876,6 +887,35 @@ const PacotesModule = {
                         </div>
                         <div class="col-md-3 col-12 d-flex align-items-end">
                             <small class="text-muted">Total = diária × quartos × diárias</small>
+                        </div>
+                        <div class="col-12 border-top pt-2 mt-1">
+                            <div class="row g-2 align-items-end">
+                                <div class="col-md-4 col-12">
+                                    <div class="form-check form-switch mb-1">
+                                        <input class="form-check-input" type="checkbox" id="svc_pag_${i}" ${s.mostrarPagamento !== false ? 'checked' : ''}
+                                               onchange="PacotesModule._onServicoChange(${i},'mostrarPagamento',this.checked)">
+                                        <label class="form-check-label small" for="svc_pag_${i}">
+                                            <i class="bi bi-credit-card me-1"></i>Formas de pagamento no PDF (PIX e cartão)
+                                        </label>
+                                    </div>
+                                </div>
+                                <div class="col-md-4 col-6">
+                                    <label class="form-label small text-muted mb-1">Taxas do cartão</label>
+                                    <select id="svc_cartao_${i}" class="form-select form-select-sm"
+                                            onchange="PacotesModule._onServicoChange(${i},'cartaoModalidade',this.value)">
+                                        <option value="presencial" ${s.cartaoModalidade !== 'mercadopago' ? 'selected' : ''}>Maquininha (presencial)</option>
+                                        <option value="mercadopago" ${s.cartaoModalidade === 'mercadopago' ? 'selected' : ''}>Link Mercado Pago</option>
+                                    </select>
+                                </div>
+                                <div class="col-md-4 col-6">
+                                    <label class="form-label small text-muted mb-1">Parcelar em até</label>
+                                    <select id="svc_parc_${i}" class="form-select form-select-sm"
+                                            onchange="PacotesModule._onServicoChange(${i},'parcelasMax',this.value)">
+                                        ${[1,2,3,4,5,6,7,8,9,10].map(n =>
+                                            `<option value="${n}" ${(+s.parcelasMax || 10) === n ? 'selected' : ''}>${n}x</option>`).join('')}
+                                    </select>
+                                </div>
+                            </div>
                         </div>
                     </div>
                 </div>` : `
@@ -1646,7 +1686,7 @@ const PacotesModule = {
             }
             iy += 5.6;
         });
-        if (restoIncl) { txt(`+ ${plural(restoIncl, 'serviço')} no roteiro abaixo`, mg + 11, iy, { size: 8, italic: true, cor: CINZA }); iy += 5.6; }
+        if (restoIncl) { txt(`+ ${plural(restoIncl, 'serviço')} ${this.MOSTRAR_ROTEIRO ? 'no roteiro abaixo' : 'no resumo de valores'}`, mg + 11, iy, { size: 8, italic: true, cor: CINZA }); iy += 5.6; }
         if (opcoesExtra) txt(`+ ${opcoesExtra === 1 ? '1 outra opção' : opcoesExtra + ' outras opções'} de hospedagem no final`, mg + 11, iy, { size: 8, italic: true, cor: CINZA });
 
         const px = mg + inclW + gapCol;
@@ -1726,6 +1766,7 @@ const PacotesModule = {
             // Hotel: diárias / quartos / hóspedes / apto em "chips"
             if (hotel) {
                 const chips = [];
+                if (+s.valorUnit > 0) chips.push(`Diária ${this._fmtMoeda(+s.valorUnit)}${+s.quartos > 1 ? ' por quarto' : ''}`);
                 if (+s.diarias > 0) chips.push(plural(+s.diarias, 'diária'));
                 if (+s.quartos > 0) chips.push(plural(+s.quartos, 'quarto'));
                 if (+s.pessoas > 0) chips.push(plural(+s.pessoas, 'hóspede'));
@@ -1769,6 +1810,50 @@ const PacotesModule = {
                     }
                     yy += h + 0.8;
                 }
+            }
+
+            // Hotel: formas de pagamento — PIX à vista + cartão parcelado com acréscimo
+            if (hotel && s.mostrarPagamento !== false && +s.valorTotal > 0) {
+                const parcelas = this._parcelamento(+s.valorTotal, s.cartaoModalidade, s.parcelasMax);
+                const x0 = cardX + pad;
+                yy += 4;
+                if (desenhar) txt('FORMAS DE PAGAMENTO', x0, yy + 2.5, { size: 6.5, bold: true, cor: CINZA, esp: 0.25 });
+                yy += 4.5;
+
+                // PIX
+                if (desenhar) {
+                    doc.setFillColor(222, 245, 230);
+                    doc.roundedRect(x0, yy, inW, 7, 1.5, 1.5, 'F');
+                    txt('PIX à vista', x0 + 3, yy + 4.7, { size: 8, bold: true, cor: [25, 120, 70] });
+                    fonte(8, 'bold');
+                    const pw2 = doc.getTextWidth('PIX à vista');
+                    txt('sem acréscimo', x0 + 3 + pw2 + 2.5, yy + 4.7, { size: 7.2, cor: [25, 120, 70] });
+                    txt(this._fmtMoeda(+s.valorTotal), x0 + inW - 3, yy + 4.8, { size: 9, bold: true, cor: [25, 120, 70], align: 'right' });
+                }
+                yy += 9;
+
+                // Cartão: grade de parcelas (até 5 por linha)
+                if (desenhar) {
+                    txt(`Cartão de crédito em até ${parcelas.length}x`, x0 + 3, yy + 3, { size: 8, bold: true, cor: TEXTO });
+                    fonte(8, 'bold');
+                    const cw2 = doc.getTextWidth(`Cartão de crédito em até ${parcelas.length}x`);
+                    txt('(com acréscimo das taxas da operadora)', x0 + 3 + cw2 + 2, yy + 3, { size: 7, cor: CINZA });
+                }
+                yy += 5;
+                const porLinha = 5, gap = 1.6;
+                const celW = (inW - gap * (porLinha - 1)) / porLinha, celH = 9;
+                parcelas.forEach((p, k) => {
+                    const col = k % porLinha;
+                    if (col === 0 && k > 0) yy += celH + gap;
+                    if (desenhar) {
+                        const cx = x0 + col * (celW + gap);
+                        doc.setFillColor(...FUNDO);
+                        doc.roundedRect(cx, yy, celW, celH, 1.2, 1.2, 'F');
+                        txt(`${p.n}x ${this._fmtMoeda(p.parcela)}`, cx + celW / 2, yy + 4, { size: 7.6, bold: true, cor: NAVY, align: 'center' });
+                        txt(`total ${this._fmtMoeda(p.total)}`, cx + celW / 2, yy + 7.4, { size: 6.2, cor: CINZA, align: 'center' });
+                    }
+                });
+                yy += celH;
             }
 
             // Aéreo: composição do valor (por passageiro e total) + regra da tarifa
@@ -1873,7 +1958,7 @@ const PacotesModule = {
             });
         };
 
-        if (roteiro.length) {
+        if (this.MOSTRAR_ROTEIRO && roteiro.length) {
             // Título só fica nesta página se o primeiro card couber junto
             secao('Roteiro da viagem', plural(roteiro.length, 'serviço'), cardServico(roteiro[0], 0, false) + docJunto(roteiro[0]));
             let ultimaData = null;
@@ -1919,7 +2004,8 @@ const PacotesModule = {
         }
 
         // ── Galeria de fotos excedentes ──
-        if (galeria.length) {
+        // Sem o roteiro, a galeria mostraria só as "sobras" de fotos que não apareceram em lugar nenhum
+        if (this.MOSTRAR_ROTEIRO && galeria.length) {
             secao('Mais fotos', null, galH + 10);
             galeria.forEach(({ s, imgs }) => {
                 _checkPage(galH + 9);
@@ -1976,11 +2062,14 @@ const PacotesModule = {
         y += 8;
 
         // ── Opções de hospedagem: cada hotel com o total do pacote se for o escolhido ──
-        if (temOpcoes) {
+        // Sem o roteiro, a hospedagem sai aqui mesmo com um hotel só (senão sumiria do PDF)
+        const hotelUnico = !temOpcoes && !this.MOSTRAR_ROTEIRO && hoteis.length > 0;
+        if (temOpcoes || hotelUnico) {
             const fator = 1 + markup / 100;
             const base  = noOrcamento.filter(s => s.tipo !== 'hotel').reduce((a, s) => a + (+s.valorTotal || 0), 0);
             const ordem = hoteis;   // ordem de inserção; a inclusa no orçamento leva o selo
             const extraDe = h => {
+                if (hotelUnico) return {};   // total já está no "Total do pacote"
                 const tot = (base + (+h.valorTotal || 0)) * fator;
                 return {
                     selo: noOrcamento.includes(h) ? 'INCLUSA NO ORÇAMENTO' : null,
@@ -1991,9 +2080,13 @@ const PacotesModule = {
                     },
                 };
             };
-            secao('Opções de hospedagem', plural(ordem.length, 'opção', 'opções'), cardServico(ordem[0], 0, false, extraDe(ordem[0])) + docJunto(ordem[0]) + 6);
-            txt('Valor do pacote completo (aéreo e demais serviços) com cada hotel. Escolha a opção de sua preferência.',
-                mg, y - 2, { size: 8, italic: true, cor: CINZA });
+            secao(hotelUnico ? 'Hospedagem' : 'Opções de hospedagem',
+                hotelUnico ? null : plural(ordem.length, 'opção', 'opções'),
+                cardServico(ordem[0], 0, false, extraDe(ordem[0])) + docJunto(ordem[0]) + 6);
+            if (!hotelUnico) {
+                txt('Valor do pacote completo (aéreo e demais serviços) com cada hotel. Escolha a opção de sua preferência.',
+                    mg, y - 2, { size: 8, italic: true, cor: CINZA });
+            }
             y += 3;
             ordem.forEach((h, idx) => {
                 const ex = extraDe(h);
@@ -2002,11 +2095,13 @@ const PacotesModule = {
                 const y0 = y;
                 const cor = rgb(tipoInfo('hotel').cor);
 
-                // Número da opção na coluna da esquerda
-                doc.setFillColor(...(ex.selo ? [25, 135, 84] : NAVY));
-                doc.circle(mg + 9, y0 + 8, 5, 'F');
-                txt(String(idx + 1), mg + 9, y0 + 10.2, { size: 12, bold: true, cor: [255, 255, 255], align: 'center' });
-                txt('OPÇÃO', mg + 9, y0 + 17.5, { size: 6.5, bold: true, cor: CINZA, align: 'center' });
+                // Número da opção na coluna da esquerda (hotel único não tem número)
+                if (!hotelUnico) {
+                    doc.setFillColor(...(ex.selo ? [25, 135, 84] : NAVY));
+                    doc.circle(mg + 9, y0 + 8, 5, 'F');
+                    txt(String(idx + 1), mg + 9, y0 + 10.2, { size: 12, bold: true, cor: [255, 255, 255], align: 'center' });
+                    txt('OPÇÃO', mg + 9, y0 + 17.5, { size: 6.5, bold: true, cor: CINZA, align: 'center' });
+                }
 
                 doc.setFillColor(...FUNDO);
                 doc.roundedRect(cardX + 0.5, y0 + 0.7, cardW, hh, 2.5, 2.5, 'F');
@@ -2170,6 +2265,19 @@ const PacotesModule = {
 
     _fmtMoeda(v) {
         return (+v||0).toLocaleString('pt-BR', { style:'currency', currency:'BRL' });
+    },
+
+    // Parcelamento no cartão com as mesmas taxas da Cotação (quotation.js):
+    // TAXAS_CARTAO (maquininha) ou TAXAS_MP (link Mercado Pago), 1x a 10x.
+    _parcelamento(valor, modalidade, max) {
+        const tabela = modalidade === 'mercadopago'
+            ? (typeof TAXAS_MP !== 'undefined' ? TAXAS_MP : [])
+            : (typeof TAXAS_CARTAO !== 'undefined' ? TAXAS_CARTAO : []);
+        const n = Math.min(Math.max(+max || 10, 1), tabela.length || 1);
+        return tabela.slice(0, n).map((taxa, k) => {
+            const total = Math.round(valor * (1 + taxa / 100) * 100) / 100;
+            return { n: k + 1, taxa, total, parcela: Math.round(total / (k + 1) * 100) / 100 };
+        });
     },
 
     // Escapa texto do usuário antes de interpolar em atributos/HTML — sem isso
