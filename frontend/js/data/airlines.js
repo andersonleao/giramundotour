@@ -79,6 +79,16 @@ const AIRLINES = [
         alliance: 'SkyTeam'
     },
 
+    // Africanas
+    {
+        code: 'VR',
+        name: 'Cabo Verde Airlines',
+        country: 'Cabo Verde',
+        logo: 'caboverde.png',
+        color: '#0A2F6B',
+        alliance: null
+    },
+
     // Europeias
     {
         code: 'TP',

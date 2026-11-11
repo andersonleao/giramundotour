@@ -115,7 +115,8 @@ const AIRPORTS = [
     // África
     { code: 'JNB', name: 'O.R. Tambo International Airport', city: 'Joanesburgo', country: 'África do Sul', countryCode: 'ZA' },
     { code: 'CPT', name: 'Cape Town International Airport', city: 'Cidade do Cabo', country: 'África do Sul', countryCode: 'ZA' },
-    { code: 'CAI', name: 'Cairo International Airport', city: 'Cairo', country: 'Egito', countryCode: 'EG' }
+    { code: 'CAI', name: 'Cairo International Airport', city: 'Cairo', country: 'Egito', countryCode: 'EG' },
+    { code: 'RAI', name: 'Aeroporto Internacional Nelson Mandela', city: 'Praia', country: 'Cabo Verde', countryCode: 'CV' }
 ];
 
 // Normaliza string removendo acentos e convertendo para minúsculas

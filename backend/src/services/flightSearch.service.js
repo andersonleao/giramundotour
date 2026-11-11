@@ -613,6 +613,7 @@ class FlightSearchService {
             { codigo: 'KL', nome: 'KLM',                 cor: '#00A1E4' },
             { codigo: 'LH', nome: 'Lufthansa',           cor: '#05164D' },
             { codigo: 'BA', nome: 'British Airways',     cor: '#075AAA' },
+            { codigo: 'VR', nome: 'Cabo Verde Airlines', cor: '#0A2F6B' },
         ];
 
         // Parceiros codeshare da LATAM (oneworld + parceiros bilaterais para rotas EUA/Europa)
@@ -621,13 +622,29 @@ class FlightSearchService {
             EU: ['IB', 'BA', 'AF', 'KL', 'LH'],
         };
 
-        let companhias = isInternacional ? companhiasInternacionais : companhiasDomesticas;
+        let companhias = isInternacional
+            ? companhiasInternacionais.filter(c => c.codigo !== 'VR')
+            : companhiasDomesticas;
+
+        // Cabo Verde Airlines (VR) só entra nas rotas que envolvem Cabo Verde (RAI).
+        const envolveCaboVerde = params.origem === 'RAI' || params.destino === 'RAI';
+        if (envolveCaboVerde) {
+            companhias = [companhiasInternacionais.find(c => c.codigo === 'VR'), ...companhias];
+        }
 
         // Azul (AD) opera voos para Punta del Este (PDP). Inclui a Azul nas rotas
         // que envolvem PDP, sem afetar as demais rotas internacionais (Europa/EUA).
         const envolvePDP = params.origem === 'PDP' || params.destino === 'PDP';
         if (envolvePDP && !companhias.some(c => c.codigo === 'AD')) {
             companhias = [{ codigo: 'AD', nome: 'Azul Linhas Aéreas', cor: '#0033A0' }, ...companhias];
+        }
+
+        // Busca restrita a uma companhia: gera voos apenas dela.
+        if (params.companhia) {
+            const alvo = companhiasInternacionais.find(c => c.codigo === params.companhia)
+                || companhiasDomesticas.find(c => c.codigo === params.companhia)
+                || { codigo: params.companhia, nome: this.getNomeCompanhia(params.companhia), cor: this.getCorCompanhia(params.companhia) };
+            companhias = [alvo];
         }
 
         // Detecta região do destino para escolher parceiros de codeshare LATAM coerentes.
@@ -944,7 +961,7 @@ class FlightSearchService {
             'LIS': { lat: 38.77, lon: -9.13 },   'OPO': { lat: 41.24, lon: -8.68 },
             'AMS': { lat: 52.31, lon: 4.76 },    'FRA': { lat: 50.04, lon: 8.56 },
             'BCN': { lat: 41.30, lon: 2.08 },    'MXP': { lat: 45.63, lon: 8.72 },
-            'ZRH': { lat: 47.46, lon: 8.55 },
+            'ZRH': { lat: 47.46, lon: 8.55 },    'RAI': { lat: 14.94, lon: -23.49 },
             'EZE': { lat: -34.82, lon: -58.54 }, 'SCL': { lat: -33.39, lon: -70.79 }
         };
 
@@ -971,7 +988,7 @@ class FlightSearchService {
             'IB': 'Iberia', 'AF': 'Air France',
             'LH': 'Lufthansa', 'BA': 'British Airways',
             'AV': 'Avianca', 'CM': 'Copa Airlines',
-            'AR': 'Aerolíneas Argentinas'
+            'AR': 'Aerolíneas Argentinas', 'VR': 'Cabo Verde Airlines'
         };
         return nomes[codigo] || codigo;
     }
@@ -985,7 +1002,7 @@ class FlightSearchService {
             'IB': '#DA291C', 'AF': '#002157',
             'LH': '#05164D', 'BA': '#075AAA',
             'AV': '#DA291C', 'CM': '#003876',
-            'AR': '#1E90FF'
+            'AR': '#1E90FF', 'VR': '#0A2F6B'
         };
         return cores[codigo] || '#666666';
     }
@@ -1014,6 +1031,7 @@ class FlightSearchService {
             { codigo: 'TP', nome: 'TAP Air Portugal', cor: '#00A651' },
             { codigo: 'AF', nome: 'Air France', cor: '#002157' },
             { codigo: 'AA', nome: 'American Airlines', cor: '#0078D2' },
+            { codigo: 'VR', nome: 'Cabo Verde Airlines', cor: '#0A2F6B' },
         ];
 
         return voosConhecidos.map((v, idx) => {
@@ -1284,6 +1302,26 @@ class FlightSearchService {
                     resultado.volta = mergeVoos([resultado.volta, laVolta]);
                     console.log(`🛬 ${aptoLatam}: injetados ${laVolta.length} voo(s) LATAM (volta)`);
                 }
+            }
+
+            // Busca restrita a uma companhia (ex.: VR = Cabo Verde Airlines):
+            // descarta voos de outras cias. Sem voo dela nas fontes, cai nos
+            // simulados da própria cia (preço estimado) para a busca não voltar vazia.
+            if (params.companhia) {
+                const alvo = params.companhia === 'LA' ? ['LA', 'JJ'] : [params.companhia];
+                const daCia = (v) => alvo.includes(String(v?.companhia?.codigo || '').toUpperCase());
+                resultado.ida = resultado.ida.filter(daCia);
+                resultado.volta = resultado.volta.filter(daCia);
+                if (resultado.ida.length === 0) {
+                    resultado.ida = this.gerarVoosSimulados({ ...params, tipo: 'ida' });
+                    resultado.meta.fonte = 'simulado';
+                }
+                if (voltaParams && resultado.volta.length === 0) {
+                    resultado.volta = this.gerarVoosSimulados({ ...voltaParams, tipo: 'volta' });
+                    resultado.volta.forEach(v => v.tipo = 'volta');
+                }
+                resultado.meta.companhia = params.companhia;
+                console.log(`🎯 Filtro companhia ${params.companhia}: ${resultado.ida.length} ida, ${resultado.volta.length} volta`);
             }
 
             // Origem do preço de cada voo. Só SerpAPI/Travelpayouts/Iberia/Skyscanner

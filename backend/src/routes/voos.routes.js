@@ -26,6 +26,7 @@ router.get('/buscar', [
     query('adultos').optional().isInt({ min: 1, max: 11 }).withMessage('Número de adultos inválido'),
     query('criancas').optional().isInt({ min: 0, max: 8 }).withMessage('Número de crianças inválido'),
     query('bebes').optional().isInt({ min: 0, max: 4 }).withMessage('Número de bebês inválido'),
+    query('companhia').optional({ checkFalsy: true }).matches(/^[A-Za-z0-9]{2}$/).withMessage('Código IATA da companhia inválido'),
     query('classe').optional().isIn(['economica', 'executiva', 'primeira']).withMessage('Classe inválida')
 ], optionalAuth, async (req, res) => {
     try {
@@ -46,7 +47,8 @@ router.get('/buscar', [
             adultos: parseInt(req.query.adultos) || 1,
             criancas: parseInt(req.query.criancas) || 0,
             bebes: parseInt(req.query.bebes) || 0,
-            classe: req.query.classe || 'economica'
+            classe: req.query.classe || 'economica',
+            companhia: (req.query.companhia || '').toUpperCase() || null
         };
 
         // Validar datas
@@ -223,7 +225,8 @@ router.get('/companhias', async (req, res) => {
         { codigo: 'BA', nome: 'British Airways', cor: '#075AAA', programa: 'Avios', pais: 'Reino Unido' },
         { codigo: 'AV', nome: 'Avianca', cor: '#DA291C', programa: 'LifeMiles', pais: 'Colômbia' },
         { codigo: 'CM', nome: 'Copa Airlines', cor: '#003876', programa: 'ConnectMiles', pais: 'Panamá' },
-        { codigo: 'AR', nome: 'Aerolíneas Argentinas', cor: '#1E90FF', programa: 'Aerolíneas Plus', pais: 'Argentina' }
+        { codigo: 'AR', nome: 'Aerolíneas Argentinas', cor: '#1E90FF', programa: 'Aerolíneas Plus', pais: 'Argentina' },
+        { codigo: 'VR', nome: 'Cabo Verde Airlines', cor: '#0A2F6B', programa: '', pais: 'Cabo Verde' }
     ];
 
     res.json({

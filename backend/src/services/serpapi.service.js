@@ -35,6 +35,8 @@ const AIRLINE_NAME_TO_CODE = {
     'Air Europa': 'UX',
     'KLM': 'KL',
     'Swiss': 'LX',
+    'Cabo Verde Airlines': 'VR',
+    'TACV Cabo Verde Airlines': 'VR',
 };
 
 const AIRLINE_COLORS = {
@@ -47,6 +49,7 @@ const AIRLINE_COLORS = {
     'AV': '#DA291C', 'CM': '#003876',
     'AR': '#1E90FF', 'UX': '#002B99',
     'KL': '#00A1DE', 'LX': '#EC0016',
+    'VR': '#0A2F6B',
 };
 
 class SerpApiFlightsService {
@@ -186,6 +189,8 @@ class SerpApiFlightsService {
 
         if ((params.criancas || 0) > 0) queryParams.children = String(params.criancas);
         if ((params.bebes || 0) > 0) queryParams.infants_in_seat = String(params.bebes);
+        // Busca restrita a uma companhia (ex.: VR = Cabo Verde Airlines)
+        if (params.companhia) queryParams.include_airlines = params.companhia;
 
         console.log(`✈️ SerpAPI buscando ${origem} → ${destino} em ${data}`);
         return this._request(queryParams);

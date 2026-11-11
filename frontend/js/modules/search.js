@@ -275,6 +275,9 @@ const SearchModule = {
         if (params.dataVolta) {
             queryParams.append('dataVolta', params.dataVolta);
         }
+        if (params.companhia) {
+            queryParams.append('companhia', params.companhia);
+        }
 
         const response = await fetch(`/api/voos/buscar?${queryParams.toString()}`);
         if (!response.ok && response.status !== 200) {
@@ -352,7 +355,8 @@ const SearchModule = {
                 criancas: parseInt(document.getElementById('criancas')?.value) || 0,
                 bebes: parseInt(document.getElementById('bebes')?.value) || 0
             },
-            classe: document.getElementById('classe')?.value || 'economica'
+            classe: document.getElementById('classe')?.value || 'economica',
+            companhia: document.getElementById('companhiaBusca')?.value || ''
         };
     },
 

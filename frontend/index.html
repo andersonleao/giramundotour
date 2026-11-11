@@ -274,7 +274,7 @@
                                     </div>
 
                                     <!-- Classe -->
-                                    <div class="col-6 col-md-3 col-lg-3">
+                                    <div class="col-6 col-md-3 col-lg-2">
                                         <label class="form-label">Classe</label>
                                         <select class="form-select" id="classe" name="classe">
                                             <option value="economica" selected>Econômica</option>
@@ -283,8 +283,32 @@
                                         </select>
                                     </div>
 
+                                    <!-- Companhia (opcional) — restringe a busca a uma cia -->
+                                    <div class="col-6 col-md-6 col-lg-2">
+                                        <label class="form-label">Companhia</label>
+                                        <select class="form-select" id="companhiaBusca" name="companhia">
+                                            <option value="" selected>Todas</option>
+                                            <option value="LA">LATAM</option>
+                                            <option value="G3">GOL</option>
+                                            <option value="AD">Azul</option>
+                                            <option value="TP">TAP Air Portugal</option>
+                                            <option value="VR">Cabo Verde Airlines</option>
+                                            <option value="IB">Iberia</option>
+                                            <option value="AF">Air France</option>
+                                            <option value="KL">KLM</option>
+                                            <option value="LH">Lufthansa</option>
+                                            <option value="BA">British Airways</option>
+                                            <option value="AA">American Airlines</option>
+                                            <option value="DL">Delta Air Lines</option>
+                                            <option value="UA">United Airlines</option>
+                                            <option value="CM">Copa Airlines</option>
+                                            <option value="AV">Avianca</option>
+                                            <option value="AR">Aerolíneas Argentinas</option>
+                                        </select>
+                                    </div>
+
                                     <!-- Botão Buscar -->
-                                    <div class="col-12 col-lg-3 d-flex align-items-end">
+                                    <div class="col-12 col-md-6 col-lg-2 d-flex align-items-end">
                                         <button type="submit" class="btn btn-primary btn-lg w-100" id="btnBuscar">
                                             <i class="bi bi-search"></i> Buscar Voos
                                         </button>
