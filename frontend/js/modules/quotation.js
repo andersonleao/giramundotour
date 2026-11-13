@@ -36,7 +36,9 @@ const QuotationModule = {
             voos: voosNormalizados,
             passageiros: dados.passageiros || { adultos: 1, criancas: 0, bebes: 0 },
             clienteId: null,
-            cliente: null
+            cliente: null,
+            // Padrão da cotação: tarifa econômica sem reembolso (editável na tela)
+            tarifa: { tipo: 'Econômica', semReembolso: true }
         };
 
         this.calcularPrecos();
@@ -301,6 +303,23 @@ const QuotationModule = {
                 <div class="quotation-item">
                     <span>Passageiros</span>
                     <span>${Formatter.passengers(passageiros)}</span>
+                </div>
+
+                <div class="quotation-item align-items-center">
+                    <span>Tarifa</span>
+                    <div class="d-flex align-items-center gap-2">
+                        <select class="form-select form-select-sm" style="width:auto;"
+                                onchange="QuotationModule.atualizarTarifa('tipo', this.value)">
+                            ${['Econômica', 'Premium Economy', 'Executiva', 'Primeira Classe'].map(t =>
+                                `<option ${(this.cotacaoAtual.tarifa?.tipo || 'Econômica') === t ? 'selected' : ''}>${t}</option>`).join('')}
+                        </select>
+                        <div class="form-check mb-0 text-nowrap">
+                            <input class="form-check-input" type="checkbox" id="cotacaoSemReembolso"
+                                   ${this.cotacaoAtual.tarifa?.semReembolso !== false ? 'checked' : ''}
+                                   onchange="QuotationModule.atualizarTarifa('semReembolso', this.checked)">
+                            <label class="form-check-label small" for="cotacaoSemReembolso">Sem reembolso</label>
+                        </div>
+                    </div>
                 </div>
 
                 <div class="quotation-item">
@@ -692,6 +711,7 @@ const QuotationModule = {
             if (result.success) {
                 this.cotacaoAtual.id   = result.data.id;
                 this.cotacaoAtual.salva = true;
+                if (window.CotacoesSalvasModule) CotacoesSalvasModule.carregar();
                 if (confirm('Cotação salva! Voltar para a Busca de Voos para cotar outra opção?\n\nNa Busca, em "Cotações salvas", você marca as opções e gera um PDF único.')) {
                     App.navigate('busca');
                 }
@@ -720,6 +740,35 @@ const QuotationModule = {
     },
 
     /**
+     * Reabre uma cotação salva (snapshot dadosPdf) para edição.
+     * Mantém o id: o próximo "Salvar" atualiza o mesmo registro.
+     */
+    abrirCotacaoSalva(id, dados) {
+        const d = dados || {};
+        this.cotacaoAtual = {
+            ...d,
+            id,
+            salva: true,
+            voos: Array.isArray(d.voos) ? d.voos : [],
+            passageiros: d.passageiros || { adultos: 1, criancas: 0, bebes: 0 },
+            clienteNome: d.cliente?.nome || d.clienteNome || '',
+            clienteTelefone: d.cliente?.telefone || d.clienteTelefone || '',
+            tarifa: { tipo: 'Econômica', semReembolso: true, ...(d.tarifa || {}) }
+        };
+        // Snapshot antigo sem preços calculados: recalcula a partir dos voos
+        if (!this.cotacaoAtual.precos || this.cotacaoAtual.precos.totalPax == null) this.calcularPrecos();
+        this.render();
+    },
+
+    /**
+     * Atualiza tipo de tarifa / reembolso (sai no PDF)
+     */
+    atualizarTarifa(campo, valor) {
+        if (!this.cotacaoAtual) return;
+        this.cotacaoAtual.tarifa = { tipo: 'Econômica', semReembolso: true, ...(this.cotacaoAtual.tarifa || {}), [campo]: valor };
+    },
+
+    /**
      * Monta o objeto que o ReportModule usa para desenhar o PDF da cotação
      * atual (cliente, preços personalizados, forma de pagamento, validade).
      * Também é gravado em cotacoes."dadosPdf" para gerar o PDF depois.
@@ -728,6 +777,7 @@ const QuotationModule = {
         const { nome, telefone } = this._lerDadosCliente();
         const dadosPDF = { ...this.cotacaoAtual };
         dadosPDF.cliente = { nome, telefone };
+        dadosPDF.tarifa = { tipo: 'Econômica', semReembolso: true, ...(this.cotacaoAtual.tarifa || {}) };
         dadosPDF.formaPagamento = this.cotacaoAtual.formaPagamento || null;
         dadosPDF.subtipoCartao = this.cotacaoAtual.subtipoCartao || null;
         dadosPDF.parcelasSelecionadas = this.cotacaoAtual.parcelasSelecionadas || null;

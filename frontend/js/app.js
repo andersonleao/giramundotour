@@ -122,11 +122,12 @@ const App = {
                 if (!document.getElementById('searchForm')) {
                     this.renderBuscaPage();
                 }
-                SearchModule.carregarCotacoesSalvas();
+                CotacoesSalvasModule.carregar();
                 break;
 
             case 'cotacao':
                 QuotationModule.render();
+                CotacoesSalvasModule.carregar();
                 break;
 
             case 'clientes':

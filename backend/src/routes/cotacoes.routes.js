@@ -177,6 +177,25 @@ router.put('/:id', async (req, res) => {
 });
 
 /**
+ * POST /api/cotacoes/excluir-lote  { ids: [...] }
+ */
+router.post('/excluir-lote', [
+    body('ids').isArray({ min: 1, max: 500 }).withMessage('Informe os ids')
+], async (req, res) => {
+    try {
+        const errors = validationResult(req);
+        if (!errors.isEmpty()) return res.status(400).json({ error: true, errors: errors.array() });
+
+        const ids = req.body.ids.map(String);
+        const { rowCount } = await pool.query('DELETE FROM cotacoes WHERE id = ANY($1::text[])', [ids]);
+        res.json({ success: true, message: 'Cotações excluídas', excluidas: rowCount });
+    } catch (error) {
+        console.error('Erro ao excluir cotações:', error);
+        res.status(500).json({ error: true, message: 'Erro interno do servidor' });
+    }
+});
+
+/**
  * DELETE /api/cotacoes/:id
  */
 router.delete('/:id', async (req, res) => {

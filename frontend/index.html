@@ -386,33 +386,8 @@
                     <div id="resumoSelecao" class="d-none"></div>
                 </div>
 
-                <!-- Cotações salvas: marcar várias e gerar um PDF único -->
-                <div class="card mt-4" id="cotacoesSalvasCard">
-                    <div class="card-header bg-white">
-                        <div class="row g-2 align-items-center">
-                            <div class="col-md-4">
-                                <h5 class="mb-0"><i class="bi bi-bookmark-check text-primary"></i> Cotações salvas</h5>
-                            </div>
-                            <div class="col-md-8">
-                                <div class="d-flex flex-wrap gap-2 justify-content-md-end">
-                                    <input type="text" class="form-control form-control-sm" id="cotacoesSalvasBusca"
-                                           placeholder="Filtrar por cliente" style="max-width: 220px;">
-                                    <button class="btn btn-sm btn-outline-secondary" onclick="SearchModule.carregarCotacoesSalvas()" title="Atualizar">
-                                        <i class="bi bi-arrow-clockwise"></i>
-                                    </button>
-                                    <button class="btn btn-sm btn-primary" id="btnPdfCotacoesSalvas" onclick="SearchModule.gerarPdfCotacoesSelecionadas()" disabled>
-                                        <i class="bi bi-file-earmark-pdf"></i> Gerar PDF único (<span id="qtdCotacoesSelecionadas">0</span>)
-                                    </button>
-                                </div>
-                            </div>
-                        </div>
-                    </div>
-                    <div class="card-body p-0">
-                        <div id="cotacoesSalvasLista" class="table-responsive">
-                            <p class="text-muted text-center my-3 small">Carregando...</p>
-                        </div>
-                    </div>
-                </div>
+                <!-- Cotações salvas (CotacoesSalvasModule): marcar várias, PDF único, excluir -->
+                <div id="cotacoesSalvasHostBusca" class="mt-4"></div>
             </section>
 
             <!-- =============================================
@@ -429,6 +404,9 @@
                 <div id="cotacaoContent">
                     <!-- Conteúdo renderizado por QuotationModule -->
                 </div>
+
+                <!-- Cotações salvas (CotacoesSalvasModule) -->
+                <div id="cotacoesSalvasHostCotacao" class="mt-4"></div>
             </section>
 
             <!-- =============================================
@@ -631,6 +609,7 @@
     <script src="js/modules/storage.js?v=2"></script>
     <script src="js/modules/search.js"></script>
     <script src="js/modules/quotation.js"></script>
+    <script src="js/modules/cotacoesSalvas.js"></script>
     <script src="js/modules/report.js"></script>
     <script src="js/modules/clients.js?v=3"></script>
     <script src="js/modules/suppliers.js?v=3"></script>

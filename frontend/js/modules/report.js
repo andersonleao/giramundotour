@@ -864,8 +864,25 @@ const ReportModule = {
 
         // Espaço necessário: box validade (9) + gap (6) + header termos (6) +
         // 5 linhas × 5 + margem antes do rodapé (8) ≈ 54mm
-        const espacoValidadeTermos = 54;
+        const espacoValidadeTermos = 65;
         if (y + espacoValidadeTermos > pageHeight - 25) { quebraPagina(); }
+
+        // Tarifa (padrão: Econômica, sem reembolso)
+        const tarifa = cotacao.tarifa || {};
+        const tarifaTipo = tarifa.tipo || 'Econômica';
+        const semReembolso = tarifa.semReembolso !== false;
+        doc.setFillColor(...(semReembolso ? [254, 242, 242] : [240, 253, 244]));
+        doc.setDrawColor(...(semReembolso ? [185, 40, 50] : [56, 161, 105]));
+        doc.setLineWidth(0.3);
+        doc.roundedRect(margin, y, contentWidth, 9, 2, 2, 'FD');
+        doc.setFontSize(8);
+        doc.setFont('helvetica', 'bold');
+        doc.setTextColor(...(semReembolso ? [185, 40, 50] : [39, 103, 73]));
+        doc.text(
+            `TARIFA ${tarifaTipo.toUpperCase()}  •  ${semReembolso ? 'SEM REEMBOLSO' : 'REEMBOLSÁVEL CONFORME REGRAS DA COMPANHIA'}`,
+            pageWidth / 2, y + 6, { align: 'center' }
+        );
+        y += 11;
 
         // Validade: data atual
         const validade = new Date();
