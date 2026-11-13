@@ -996,6 +996,281 @@ const ReportModule = {
     },
 
     /**
+     * Relatório de cotações em GRADE (A4 paisagem): uma linha por voo,
+     * agrupada por opção — cia/voo, data, origem, partida, destino, chegada,
+     * duração, escalas, tarifa, valor por pessoa e total da opção.
+     * @param {object[]} cotacoes — mesmo formato aceito por gerarCotacaoPDF
+     */
+    async gerarCotacoesGradePDF(cotacoes) {
+        if (!Array.isArray(cotacoes) || cotacoes.length === 0) return;
+        if (typeof jspdf === 'undefined' || typeof jspdf.jsPDF === 'undefined') {
+            alert('Biblioteca jsPDF não carregada. Verifique a conexão com a internet.');
+            return;
+        }
+
+        const logoBase64 = await this.carregarLogo();
+        const { jsPDF } = jspdf;
+        const doc = new jsPDF({ orientation: 'landscape' });
+        const pageWidth = doc.internal.pageSize.getWidth();
+        const pageHeight = doc.internal.pageSize.getHeight();
+        const margin = 10;
+        const primaryColor = [26, 54, 93];
+        const primaryLight = [66, 153, 225];
+
+        // ── Helpers de dados ─────────────────────────────────────
+        const totalDaCotacao = (c) => {
+            const p = c.precos || {};
+            if (p.total != null) return Number(p.total) || 0;
+            const pax = p.totalPax || 1;
+            return ((p.valorPorPessoa || 0) + (p.taxaPorPessoa || 0)) * pax
+                + (p.qtdBagagens || 0) * (p.valorBagagem || 0);
+        };
+        const porPessoa = (c) => {
+            const p = c.precos || {};
+            if (p.valorPorPessoa != null) return (p.valorPorPessoa || 0) + (p.taxaPorPessoa || 0);
+            return totalDaCotacao(c) / (p.totalPax || 1);
+        };
+        const fmtDur = (min) => {
+            min = Math.round(Number(min) || 0);
+            if (!min) return '—';
+            const h = Math.floor(min / 60), m = min % 60;
+            return h ? `${h}h${m ? String(m).padStart(2, '0') : ''}` : `${m}min`;
+        };
+        const diasEntre = (a, b) => {
+            const da = new Date(a), db = new Date(b);
+            if (isNaN(da) || isNaN(db)) return 0;
+            const ua = Date.UTC(da.getFullYear(), da.getMonth(), da.getDate());
+            const ub = Date.UTC(db.getFullYear(), db.getMonth(), db.getDate());
+            return Math.round((ub - ua) / 86400000);
+        };
+        const cidade = (code) => (getAirportByCode(code) || {}).city || '';
+        const escalasTxt = (v) => {
+            const n = Number(v.escalas) || 0;
+            if (!n) return 'Direto';
+            const segs = Array.isArray(v.segmentos) ? v.segmentos : [];
+            const hubs = segs.length > 1 ? segs.slice(0, -1).map(s => s.destino).filter(Boolean) : [];
+            return `${n} ${n === 1 ? 'escala' : 'escalas'}${hubs.length ? ' (' + hubs.join(', ') + ')' : ''}`;
+        };
+        const ajustar = (txt, larg) => {
+            // Corta o texto para caber na coluna (com reticências)
+            txt = String(txt ?? '');
+            if (doc.getTextWidth(txt) <= larg) return txt;
+            while (txt.length > 1 && doc.getTextWidth(txt + '…') > larg) txt = txt.slice(0, -1);
+            return txt + '…';
+        };
+
+        // ── Colunas (soma = 277mm úteis) ─────────────────────────
+        const cols = [
+            { key: 'opcao',    titulo: 'Nº',         w: 9,  align: 'center', grupo: true },
+            { key: 'trecho',   titulo: 'Trecho',     w: 14, align: 'center' },
+            { key: 'cia',      titulo: 'Cia / Voo',  w: 42 },
+            { key: 'data',     titulo: 'Data',       w: 18, align: 'center' },
+            { key: 'origem',   titulo: 'Origem',     w: 26 },
+            { key: 'partida',  titulo: 'Partida',    w: 14, align: 'center' },
+            { key: 'destino',  titulo: 'Destino',    w: 26 },
+            { key: 'chegada',  titulo: 'Chegada',    w: 16, align: 'center' },
+            { key: 'duracao',  titulo: 'Duração',    w: 15, align: 'center' },
+            { key: 'escalas',  titulo: 'Escalas',    w: 26 },
+            { key: 'tarifa',   titulo: 'Tarifa',     w: 24, align: 'center', grupo: true },
+            { key: 'pessoa',   titulo: 'Por pessoa', w: 22, align: 'right', grupo: true },
+            { key: 'total',    titulo: 'Total',      w: 25, align: 'right', grupo: true }
+        ];
+        const larguraTabela = pageWidth - margin * 2;
+        const somaW = cols.reduce((s, c) => s + c.w, 0);
+        cols[cols.length - 1].w += larguraTabela - somaW; // fecha a largura exata
+        let cx = margin;
+        cols.forEach(c => { c.x = cx; cx += c.w; });
+
+        const textoCelula = (col, txt, y, h, opts = {}) => {
+            const pad = 1.8;
+            const t = ajustar(txt, col.w - pad * 2);
+            const ty = y + h / 2 + 1.2;
+            if (col.align === 'center') doc.text(t, col.x + col.w / 2, ty, { align: 'center' });
+            else if (col.align === 'right') doc.text(t, col.x + col.w - pad, ty, { align: 'right' });
+            else doc.text(t, col.x + pad, ty);
+        };
+
+        // ── Cabeçalho / rodapé ───────────────────────────────────
+        const nomes = [...new Set(cotacoes.map(c => (c.cliente && c.cliente.nome) || '').filter(Boolean))];
+        const paxRef = cotacoes[0].passageiros || {};
+        const desenharCabecalho = () => {
+            doc.setFillColor(...primaryColor);
+            doc.rect(0, 0, pageWidth, 24, 'F');
+            let tx = margin;
+            if (logoBase64) {
+                try {
+                    doc.setFillColor(255, 255, 255);
+                    doc.roundedRect(margin, 3, 18, 18, 2, 2, 'F');
+                    doc.addImage(logoBase64, 'PNG', margin + 0.5, 3.5, 17, 17);
+                    tx = margin + 22;
+                } catch (_) { /* segue sem logo */ }
+            }
+            doc.setTextColor(255, 255, 255);
+            doc.setFont('helvetica', 'bold');
+            doc.setFontSize(15);
+            doc.text('GiraMundoTour', tx, 12);
+            doc.setFont('helvetica', 'normal');
+            doc.setFontSize(8);
+            doc.text(CONFIG.empresa.slogan || '', tx, 18);
+
+            doc.setFont('helvetica', 'bold');
+            doc.setFontSize(12);
+            doc.text('COTAÇÃO DE VOOS — QUADRO COMPARATIVO', pageWidth - margin, 11, { align: 'right' });
+            doc.setFont('helvetica', 'normal');
+            doc.setFontSize(8);
+            doc.text(`${CONFIG.empresa.email}  |  ${CONFIG.empresa.telefone}  |  ${CONFIG.empresa.instagram}`,
+                pageWidth - margin, 18, { align: 'right' });
+
+            let y = 31;
+            doc.setTextColor(...primaryColor);
+            doc.setFontSize(9);
+            doc.setFont('helvetica', 'bold');
+            doc.text(`Cliente: ${nomes.length ? nomes.join(', ') : '—'}`, margin, y);
+            doc.setFont('helvetica', 'normal');
+            doc.setTextColor(80, 80, 80);
+            const infoDir = `Passageiros: ${Formatter.passengers(paxRef)}   |   Emitido em ${Formatter.date(new Date())}`;
+            doc.text(infoDir, pageWidth - margin, y, { align: 'right' });
+            y += 4;
+
+            // Cabeçalho da grade
+            const hH = 8;
+            doc.setFillColor(...primaryColor);
+            doc.rect(margin, y, larguraTabela, hH, 'F');
+            doc.setTextColor(255, 255, 255);
+            doc.setFontSize(7.5);
+            doc.setFont('helvetica', 'bold');
+            cols.forEach(c => textoCelula(c, c.titulo, y, hH));
+            return y + hH;
+        };
+        const desenharRodape = () => {
+            const fy = pageHeight - 8;
+            doc.setDrawColor(...primaryLight);
+            doc.setLineWidth(0.3);
+            doc.line(margin, fy - 4, pageWidth - margin, fy - 4);
+            doc.setFontSize(7);
+            doc.setFont('helvetica', 'normal');
+            doc.setTextColor(110, 110, 110);
+            doc.text(`${CONFIG.empresa.nome}  |  CNPJ: ${CONFIG.empresa.cnpj}`, margin, fy);
+            doc.text('Valores sujeitos a alteração e disponibilidade até a emissão.', pageWidth / 2, fy, { align: 'center' });
+            doc.text(`Página ${doc.internal.getNumberOfPages()}`, pageWidth - margin, fy, { align: 'right' });
+        };
+
+        // ── Grade ────────────────────────────────────────────────
+        const rowH = 9;
+        const limiteY = pageHeight - 16;
+        let y = desenharCabecalho();
+        let somaTotal = 0;
+
+        cotacoes.forEach((c, i) => {
+            const voos = (Array.isArray(c.voos) ? c.voos : []);
+            const linhas = voos.length ? voos : [{}];
+            const grupoH = linhas.length * rowH;
+
+            if (y + grupoH > limiteY) {
+                desenharRodape();
+                doc.addPage();
+                y = desenharCabecalho();
+            }
+
+            // Fundo do grupo (zebra por opção)
+            const zebra = i % 2 === 0 ? [255, 255, 255] : [241, 245, 251];
+            doc.setFillColor(...zebra);
+            doc.rect(margin, y, larguraTabela, grupoH, 'F');
+
+            const total = totalDaCotacao(c);
+            somaTotal += total;
+            const tarifa = c.tarifa || {};
+
+            linhas.forEach((v, li) => {
+                const ly = y + li * rowH;
+                const tipo = v.tipo === 'volta' || (li > 0 && !v.tipo) ? 'Volta' : 'Ida';
+                const cia = [v.companhiaNome || v.companhia || '', v.numeroVoo || ''].filter(Boolean).join(' ');
+                const dPlus = v.dataChegada ? diasEntre(v.dataPartida, v.dataChegada) : 0;
+
+                // Divisória fina entre voos da mesma opção (fora das colunas agrupadas)
+                if (li > 0) {
+                    doc.setDrawColor(215, 222, 232);
+                    doc.setLineWidth(0.1);
+                    const xIni = cols.find(cc => cc.key === 'trecho').x;
+                    const xFim = cols.find(cc => cc.key === 'tarifa').x;
+                    doc.line(xIni, ly, xFim, ly);
+                }
+
+                doc.setFontSize(7.5);
+                doc.setTextColor(50, 50, 50);
+                doc.setFont('helvetica', 'bold');
+                doc.setTextColor(...(tipo === 'Ida' ? primaryColor : [39, 103, 73]));
+                textoCelula(cols[1], v.origem ? tipo : '', ly, rowH);
+                doc.setTextColor(50, 50, 50);
+                doc.setFont('helvetica', 'normal');
+
+                const valores = {
+                    cia,
+                    data: v.dataPartida ? Formatter.date(v.dataPartida) : '',
+                    origem: v.origem ? `${v.origem} ${cidade(v.origem)}` : '',
+                    partida: v.dataPartida ? Formatter.time(v.dataPartida) : '',
+                    destino: v.destino ? `${v.destino} ${cidade(v.destino)}` : '',
+                    chegada: v.dataChegada ? `${Formatter.time(v.dataChegada)}${dPlus > 0 ? ' +' + dPlus : ''}` : '',
+                    duracao: v.origem ? fmtDur(v.duracao) : '',
+                    escalas: v.origem ? escalasTxt(v) : ''
+                };
+                cols.filter(cc => !cc.grupo && cc.key !== 'trecho').forEach(cc => {
+                    doc.setFont('helvetica', ['partida', 'chegada'].includes(cc.key) ? 'bold' : 'normal');
+                    textoCelula(cc, valores[cc.key], ly, rowH);
+                });
+            });
+
+            // Colunas agrupadas (centralizadas na altura do grupo)
+            doc.setFontSize(9);
+            doc.setFont('helvetica', 'bold');
+            doc.setTextColor(...primaryColor);
+            textoCelula(cols[0], String(i + 1), y, grupoH);
+            doc.setFontSize(7.5);
+            doc.setFont('helvetica', 'normal');
+            // Tarifa em duas linhas: tipo + reembolso
+            const colTarifa = cols.find(cc => cc.key === 'tarifa');
+            const semReemb = tarifa.semReembolso !== false;
+            doc.setTextColor(60, 60, 60);
+            textoCelula(colTarifa, tarifa.tipo || 'Econômica', y - 2, grupoH);
+            doc.setFontSize(6.5);
+            doc.setTextColor(...(semReemb ? [185, 40, 50] : [39, 103, 73]));
+            textoCelula(colTarifa, semReemb ? 'Sem reembolso' : 'Reembolsável', y + 2, grupoH);
+            doc.setFontSize(7.5);
+            doc.setTextColor(50, 50, 50);
+            textoCelula(cols.find(cc => cc.key === 'pessoa'), Formatter.currency(porPessoa(c)), y, grupoH);
+            doc.setFont('helvetica', 'bold');
+            doc.setTextColor(...primaryColor);
+            textoCelula(cols.find(cc => cc.key === 'total'), Formatter.currency(total), y, grupoH);
+
+            // Borda do grupo
+            doc.setDrawColor(190, 200, 215);
+            doc.setLineWidth(0.2);
+            doc.rect(margin, y, larguraTabela, grupoH, 'D');
+            y += grupoH;
+        });
+
+        // Linha de total geral (soma das opções), só com mais de uma
+        if (cotacoes.length > 1) {
+            if (y + 11 > limiteY) { desenharRodape(); doc.addPage(); y = desenharCabecalho(); }
+            y += 2;
+            doc.setFillColor(...primaryColor);
+            doc.rect(margin, y, larguraTabela, 9, 'F');
+            doc.setTextColor(255, 255, 255);
+            doc.setFontSize(9);
+            doc.setFont('helvetica', 'bold');
+            doc.text(`VALOR TOTAL (${cotacoes.length} opções)`, margin + 3, y + 6);
+            doc.text(Formatter.currency(somaTotal), pageWidth - margin - 1.8, y + 6, { align: 'right' });
+            y += 9;
+        }
+
+        desenharRodape();
+
+        const base = nomes.length === 1 ? nomes[0].replace(/\s+/g, '_') : 'Clientes';
+        const data = Formatter.date(new Date()).replace(/\//g, '-');
+        doc.save(`Cotacoes_Grade_${base}_${data}.pdf`);
+    },
+
+    /**
      * Página final do PDF único: uma linha por opção com o total de cada uma
      * e o VALOR TOTAL (soma) em destaque.
      */

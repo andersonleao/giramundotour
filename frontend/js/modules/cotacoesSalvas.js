@@ -109,6 +109,10 @@ const CotacoesSalvasModule = {
                                 <button class="btn btn-sm btn-outline-danger" onclick="CotacoesSalvasModule.excluirSelecionadas()" ${qtdSel ? '' : 'disabled'}>
                                     <i class="bi bi-trash"></i> Excluir (${qtdSel})
                                 </button>
+                                <button class="btn btn-sm btn-outline-primary" onclick="CotacoesSalvasModule.gerarPdf(null, 'grade')" ${qtdSel ? '' : 'disabled'}
+                                        title="Relatório em grade: uma linha por voo com origem, destino, horários, escalas e preço">
+                                    <i class="bi bi-table"></i> PDF em grade (${qtdSel})
+                                </button>
                                 <button class="btn btn-sm btn-primary" onclick="CotacoesSalvasModule.gerarPdf()" ${qtdSel ? '' : 'disabled'}>
                                     <i class="bi bi-file-earmark-pdf"></i> Gerar PDF único (${qtdSel})
                                 </button>
@@ -215,8 +219,9 @@ const CotacoesSalvasModule = {
     /**
      * Gera um único PDF com as cotações marcadas (ou com os ids recebidos).
      * Ordem das opções: da mais antiga para a mais recente.
+     * formato: 'padrao' (uma cotação por página) ou 'grade' (quadro comparativo).
      */
-    async gerarPdf(ids) {
+    async gerarPdf(ids, formato = 'padrao') {
         const alvo = new Set(ids || [...this._selecionadas]);
         const selecionadas = this._lista.filter(c => alvo.has(c.id));
         const semDados = selecionadas.filter(c => !c.dadosPdf).length;
@@ -230,7 +235,8 @@ const CotacoesSalvasModule = {
             return;
         }
         if (semDados) alert(`${semDados} cotação(ões) antiga(s) sem dados para o PDF foram ignoradas.`);
-        await ReportModule.gerarCotacoesPDF(lista);
+        if (formato === 'grade') await ReportModule.gerarCotacoesGradePDF(lista);
+        else await ReportModule.gerarCotacoesPDF(lista);
     },
 
     /**
