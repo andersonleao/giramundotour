@@ -932,12 +932,28 @@ const ReportModule = {
         });
 
         // ==========================================
+        // VALOR TOTAL (fechamento do relatório)
+        // ==========================================
+
+        y += 4;
+        if (y + 16 > pageHeight - 25) { quebraPagina(); }
+        doc.setFillColor(...primaryColor);
+        doc.roundedRect(margin, y, contentWidth, 14, 3, 3, 'F');
+        doc.setTextColor(255, 255, 255);
+        doc.setFontSize(11);
+        doc.setFont('helvetica', 'bold');
+        doc.text(`VALOR TOTAL (${totalPax} ${totalPax === 1 ? 'passageiro' : 'passageiros'})`, margin + 6, y + 9);
+        doc.setFontSize(14);
+        doc.text(Formatter.currency(totalGeral), pageWidth - margin - 6, y + 9.5, { align: 'right' });
+        y += 14;
+
+        // ==========================================
         // RODAPÉ (última página)
         // ==========================================
 
         desenharRodape();
 
-        if (docExterno) return doc;
+        if (docExterno) return totalGeral;
 
         // ==========================================
         // SALVAR PDF
@@ -963,17 +979,124 @@ const ReportModule = {
         const { jsPDF } = jspdf;
         const doc = new jsPDF();
         const total = cotacoes.length;
+        const totais = [];
         for (let i = 0; i < total; i++) {
-            await this.gerarCotacaoPDF(cotacoes[i], {
+            const t = await this.gerarCotacaoPDF(cotacoes[i], {
                 doc,
                 novaPagina: i > 0,
                 titulo: total > 1 ? `OPÇÃO ${i + 1} DE ${total}` : null
             });
+            totais.push(Number(t) || 0);
         }
+        if (total > 1) this._resumoCotacoesPDF(doc, cotacoes, totais);
         const nomes = [...new Set(cotacoes.map(c => (c.cliente && c.cliente.nome) || '').filter(Boolean))];
         const base = nomes.length === 1 ? nomes[0].replace(/\s+/g, '_') : 'Clientes';
         const data = Formatter.date(new Date()).replace(/\//g, '-');
         doc.save(`Cotacoes_${base}_${data}.pdf`);
+    },
+
+    /**
+     * Página final do PDF único: uma linha por opção com o total de cada uma
+     * e o VALOR TOTAL (soma) em destaque.
+     */
+    _resumoCotacoesPDF(doc, cotacoes, totais) {
+        const pageWidth = doc.internal.pageSize.getWidth();
+        const pageHeight = doc.internal.pageSize.getHeight();
+        const margin = 20;
+        const contentWidth = pageWidth - margin * 2;
+        const primaryColor = [26, 54, 93];
+        const primaryLight = [66, 153, 225];
+
+        const rodape = () => {
+            const footerY = pageHeight - 20;
+            doc.setDrawColor(...primaryLight);
+            doc.setLineWidth(0.5);
+            doc.line(margin, footerY, pageWidth - margin, footerY);
+            doc.setFontSize(8);
+            doc.setFont('helvetica', 'bold');
+            doc.setTextColor(60, 60, 60);
+            doc.text(CONFIG.empresa.nome, margin, footerY + 5);
+            doc.setFont('helvetica', 'normal');
+            doc.setTextColor(100, 100, 100);
+            doc.text('CNPJ: ' + CONFIG.empresa.cnpj, pageWidth - margin, footerY + 5, { align: 'right' });
+        };
+        const cabecalho = () => {
+            doc.setFillColor(...primaryColor);
+            doc.rect(0, 0, pageWidth, 25, 'F');
+            doc.setTextColor(255, 255, 255);
+            doc.setFontSize(16);
+            doc.setFont('helvetica', 'bold');
+            doc.text('GiraMundoTour', margin, 16);
+            doc.setFontSize(11);
+            doc.text('RESUMO DAS COTAÇÕES', pageWidth - margin, 16, { align: 'right' });
+            return 40;
+        };
+
+        doc.addPage();
+        let y = cabecalho();
+
+        const nomes = [...new Set(cotacoes.map(c => (c.cliente && c.cliente.nome) || '').filter(Boolean))];
+        if (nomes.length) {
+            doc.setTextColor(...primaryColor);
+            doc.setFontSize(10);
+            doc.setFont('helvetica', 'bold');
+            doc.text(`Cliente: ${nomes.join(', ')}`, margin, y);
+            y += 10;
+        }
+
+        // Cabeçalho da tabela
+        const rowH = 9;
+        doc.setFillColor(...primaryColor);
+        doc.rect(margin, y, contentWidth, rowH, 'F');
+        doc.setTextColor(255, 255, 255);
+        doc.setFontSize(9);
+        doc.setFont('helvetica', 'bold');
+        doc.text('Opção', margin + 3, y + 6);
+        doc.text('Rota / Datas / Companhia', margin + 25, y + 6);
+        doc.text('Total', pageWidth - margin - 3, y + 6, { align: 'right' });
+        y += rowH;
+
+        cotacoes.forEach((c, i) => {
+            if (y + rowH > pageHeight - 45) { rodape(); doc.addPage(); y = cabecalho(); }
+            const voos = Array.isArray(c.voos) ? c.voos : [];
+            const ida = voos[0] || {};
+            const volta = voos[1];
+            // Seta "→" não existe na fonte padrão do jsPDF: usa hífen
+            const rota = ida.origem ? `${ida.origem} - ${ida.destino}${volta ? ' - ' + (volta.destino || ida.origem) : ''}` : '—';
+            const datas = voos.map(v => v.dataPartida ? Formatter.date(v.dataPartida) : '').filter(Boolean).join(' / ');
+            const cias = [...new Set(voos.map(v => v.companhiaNome || v.companhia).filter(Boolean))].join(', ');
+            const descricao = doc.splitTextToSize([rota, datas, cias].filter(Boolean).join('  |  '), contentWidth - 60)[0];
+
+            doc.setFillColor(i % 2 === 0 ? 248 : 255, i % 2 === 0 ? 250 : 255, i % 2 === 0 ? 252 : 255);
+            doc.rect(margin, y, contentWidth, rowH, 'F');
+            doc.setDrawColor(220, 220, 220);
+            doc.setLineWidth(0.1);
+            doc.rect(margin, y, contentWidth, rowH, 'D');
+
+            doc.setTextColor(60, 60, 60);
+            doc.setFontSize(9);
+            doc.setFont('helvetica', 'bold');
+            doc.text(String(i + 1), margin + 8, y + 6, { align: 'center' });
+            doc.setFont('helvetica', 'normal');
+            doc.text(descricao, margin + 25, y + 6);
+            doc.setFont('helvetica', 'bold');
+            doc.text(Formatter.currency(totais[i]), pageWidth - margin - 3, y + 6, { align: 'right' });
+            y += rowH;
+        });
+
+        // VALOR TOTAL (soma das opções)
+        y += 6;
+        const soma = totais.reduce((s, v) => s + v, 0);
+        doc.setFillColor(...primaryColor);
+        doc.roundedRect(margin, y, contentWidth, 16, 3, 3, 'F');
+        doc.setTextColor(255, 255, 255);
+        doc.setFontSize(12);
+        doc.setFont('helvetica', 'bold');
+        doc.text(`VALOR TOTAL (${cotacoes.length} opções)`, margin + 6, y + 10.5);
+        doc.setFontSize(15);
+        doc.text(Formatter.currency(soma), pageWidth - margin - 6, y + 11, { align: 'right' });
+
+        rodape();
     },
 
     /**
