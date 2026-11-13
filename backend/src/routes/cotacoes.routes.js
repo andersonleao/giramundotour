@@ -8,7 +8,20 @@ const { body, validationResult } = require('express-validator');
 const { pool } = require('../config/database');
 const { authMiddleware } = require('../middleware/auth.middleware');
 
+// Migração idempotente: cotação de cliente não cadastrado (clienteId nulo),
+// nome do cliente digitado e snapshot completo usado para gerar o PDF.
+const _migracao = (async () => {
+    try {
+        await pool.query(`ALTER TABLE cotacoes ALTER COLUMN "clienteId" DROP NOT NULL`);
+        await pool.query(`ALTER TABLE cotacoes ADD COLUMN IF NOT EXISTS "clienteNome" TEXT`);
+        await pool.query(`ALTER TABLE cotacoes ADD COLUMN IF NOT EXISTS "dadosPdf" TEXT`);
+    } catch (e) {
+        console.error("[cotacoes] Falha na migração:", e.message);
+    }
+})();
+
 router.use(authMiddleware);
+router.use(async (req, res, next) => { await _migracao; next(); });
 
 /**
  * GET /api/cotacoes
@@ -22,27 +35,31 @@ router.get('/', async (req, res) => {
 
         if (clienteId) { conditions.push(`co."clienteId" = $${idx++}`); values.push(clienteId); }
         if (status)    { conditions.push(`co.status = $${idx++}`);       values.push(status); }
+        if (req.query.busca) {
+            conditions.push(`(COALESCE(c.nome, co."clienteNome", co.observacoes, '') ILIKE $${idx++})`);
+            values.push(`%${req.query.busca}%`);
+        }
 
         const where = conditions.length > 0 ? 'WHERE ' + conditions.join(' AND ') : '';
         const offset = (parseInt(page) - 1) * parseInt(limit);
 
         const [cotacoesRes, countRes] = await Promise.all([
             pool.query(
-                `SELECT co.*, c.id AS "clienteId_rel", c.nome AS "clienteNome", c.email AS "clienteEmail"
+                `SELECT co.*, c.id AS "clienteId_rel", c.nome AS "clienteNomeRel", c.email AS "clienteEmail"
                  FROM cotacoes co
                  LEFT JOIN clientes c ON c.id = co."clienteId"
                  ${where} ORDER BY co."createdAt" DESC LIMIT $${idx} OFFSET $${idx + 1}`,
                 [...values, parseInt(limit), offset]
             ),
-            pool.query(`SELECT COUNT(*) FROM cotacoes co ${where}`, values)
+            pool.query(`SELECT COUNT(*) FROM cotacoes co LEFT JOIN clientes c ON c.id = co."clienteId" ${where}`, values)
         ]);
 
         const total = parseInt(countRes.rows[0].count);
 
         const cotacoes = cotacoesRes.rows.map(r => {
             const co = { ...r };
-            co.cliente = r.clienteNome ? { id: r['clienteId_rel'], nome: r.clienteNome, email: r.clienteEmail } : null;
-            delete co.clienteNome; delete co.clienteEmail; delete co['clienteId_rel'];
+            co.cliente = r.clienteNomeRel ? { id: r['clienteId_rel'], nome: r.clienteNomeRel, email: r.clienteEmail } : null;
+            delete co.clienteNomeRel; delete co.clienteEmail; delete co['clienteId_rel'];
             return co;
         });
 
@@ -63,7 +80,7 @@ router.get('/', async (req, res) => {
 router.get('/:id', async (req, res) => {
     try {
         const { rows } = await pool.query(
-            `SELECT co.*, c.id AS "clienteId_rel", c.nome AS "clienteNome", c.email AS "clienteEmail"
+            `SELECT co.*, c.id AS "clienteId_rel", c.nome AS "clienteNomeRel", c.email AS "clienteEmail"
              FROM cotacoes co
              LEFT JOIN clientes c ON c.id = co."clienteId"
              WHERE co.id = $1`,
@@ -74,10 +91,11 @@ router.get('/:id', async (req, res) => {
 
         const r = rows[0];
         const cotacao = { ...r };
-        cotacao.cliente = r.clienteNome ? { id: r['clienteId_rel'], nome: r.clienteNome, email: r.clienteEmail } : null;
+        cotacao.cliente = r.clienteNomeRel ? { id: r['clienteId_rel'], nome: r.clienteNomeRel, email: r.clienteEmail } : null;
         cotacao.voos = JSON.parse(cotacao.voos || '[]');
         cotacao.passageiros = JSON.parse(cotacao.passageiros || '{}');
-        delete cotacao.clienteNome; delete cotacao.clienteEmail; delete cotacao['clienteId_rel'];
+        try { cotacao.dadosPdf = cotacao.dadosPdf ? JSON.parse(cotacao.dadosPdf) : null; } catch (_) { cotacao.dadosPdf = null; }
+        delete cotacao.clienteNomeRel; delete cotacao.clienteEmail; delete cotacao['clienteId_rel'];
 
         res.json({ success: true, data: cotacao });
     } catch (error) {
@@ -99,16 +117,17 @@ router.post('/', [
             return res.status(400).json({ error: true, errors: errors.array() });
         }
 
-        const { clienteId, voos, passageiros, subtotal, taxas, total, validade, observacoes } = req.body;
+        const { clienteId, clienteNome, voos, passageiros, subtotal, taxas, total, validade, observacoes, dadosPdf } = req.body;
         const dataValidade = validade ? new Date(validade) : new Date(Date.now() + 3 * 24 * 60 * 60 * 1000);
 
         const { rows } = await pool.query(
-            `INSERT INTO cotacoes (id, "clienteId", voos, passageiros, subtotal, taxas, total, validade, status, observacoes, "createdAt", "updatedAt")
-             VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, $6, $7, 'pendente', $8, NOW(), NOW())
+            `INSERT INTO cotacoes (id, "clienteId", "clienteNome", voos, passageiros, subtotal, taxas, total, validade, status, observacoes, "dadosPdf", "createdAt", "updatedAt")
+             VALUES (gen_random_uuid(), $1, $9, $2, $3, $4, $5, $6, $7, 'pendente', $8, $10, NOW(), NOW())
              RETURNING *`,
             [clienteId, JSON.stringify(voos), JSON.stringify(passageiros || {}),
              parseFloat(subtotal) || 0, parseFloat(taxas) || 0, parseFloat(total),
-             dataValidade, observacoes || null]
+             dataValidade, observacoes || null, clienteNome || null,
+             dadosPdf ? JSON.stringify(dadosPdf) : null]
         );
 
         const cotacaoCompleta = await _getCotacaoComRelacoes(rows[0].id);
@@ -124,7 +143,7 @@ router.post('/', [
  */
 router.put('/:id', async (req, res) => {
     try {
-        const { clienteId, voos, passageiros, subtotal, taxas, total, validade, status, observacoes } = req.body;
+        const { clienteId, clienteNome, voos, passageiros, subtotal, taxas, total, validade, status, observacoes, dadosPdf } = req.body;
 
         const sets = [];
         const values = [];
@@ -138,6 +157,8 @@ router.put('/:id', async (req, res) => {
         if (total !== undefined)        { sets.push(`total = $${idx++}`);         values.push(parseFloat(total)); }
         if (validade)                   { sets.push(`validade = $${idx++}`);      values.push(new Date(validade)); }
         if (status)                     { sets.push(`status = $${idx++}`);        values.push(status); }
+        if (clienteNome !== undefined)  { sets.push(`"clienteNome" = $${idx++}`); values.push(clienteNome || null); }
+        if (dadosPdf !== undefined)     { sets.push(`"dadosPdf" = $${idx++}`);    values.push(dadosPdf ? JSON.stringify(dadosPdf) : null); }
         if (observacoes !== undefined)  { sets.push(`observacoes = $${idx++}`);   values.push(observacoes || null); }
 
         if (sets.length === 0) return res.status(400).json({ error: true, message: 'Nenhum campo para atualizar' });
@@ -170,15 +191,15 @@ router.delete('/:id', async (req, res) => {
 
 async function _getCotacaoComRelacoes(id) {
     const { rows } = await pool.query(
-        `SELECT co.*, c.id AS "clienteId_rel", c.nome AS "clienteNome", c.email AS "clienteEmail"
+        `SELECT co.*, c.id AS "clienteId_rel", c.nome AS "clienteNomeRel", c.email AS "clienteEmail"
          FROM cotacoes co LEFT JOIN clientes c ON c.id = co."clienteId" WHERE co.id = $1`,
         [id]
     );
     if (rows.length === 0) return null;
     const r = rows[0];
     const co = { ...r };
-    co.cliente = r.clienteNome ? { id: r['clienteId_rel'], nome: r.clienteNome, email: r.clienteEmail } : null;
-    delete co.clienteNome; delete co.clienteEmail; delete co['clienteId_rel'];
+    co.cliente = r.clienteNomeRel ? { id: r['clienteId_rel'], nome: r.clienteNomeRel, email: r.clienteEmail } : null;
+    delete co.clienteNomeRel; delete co.clienteEmail; delete co['clienteId_rel'];
     return co;
 }
 

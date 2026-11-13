@@ -202,7 +202,13 @@ const ReportModule = {
         return this._iconsBase64.instagram;
     },
 
-    async gerarCotacaoPDF(cotacao) {
+    /**
+     * Gera o PDF de uma cotação.
+     * opcoes.doc    — jsPDF já aberto: a cotação entra em nova página dele e o
+     *                 arquivo NÃO é salvo (usado por gerarCotacoesPDF).
+     * opcoes.titulo — rótulo extra no título (ex.: "OPÇÃO 2 DE 3").
+     */
+    async gerarCotacaoPDF(cotacao, opcoes = {}) {
         // Verifica se jsPDF está disponível
         if (typeof jspdf === 'undefined' || typeof jspdf.jsPDF === 'undefined') {
             alert('Biblioteca jsPDF não carregada. Verifique a conexão com a internet.');
@@ -213,7 +219,9 @@ const ReportModule = {
         const logoBase64 = await this.carregarLogo();
 
         const { jsPDF } = jspdf;
-        const doc = new jsPDF();
+        const docExterno = !!opcoes.doc;
+        const doc = opcoes.doc || new jsPDF();
+        if (docExterno && opcoes.novaPagina) doc.addPage();
 
         // Configurações
         const pageWidth = doc.internal.pageSize.getWidth();
@@ -335,6 +343,12 @@ const ReportModule = {
         doc.setFontSize(18);
         doc.setFont('helvetica', 'bold');
         doc.text('COTAÇÃO DE PASSAGENS AÉREAS', margin, y);
+        if (opcoes.titulo) {
+            doc.setFontSize(11);
+            doc.setTextColor(237, 137, 54);
+            doc.text(opcoes.titulo, pageWidth - margin, y, { align: 'right' });
+            doc.setTextColor(...primaryColor);
+        }
 
         y += 8;
 
@@ -906,6 +920,8 @@ const ReportModule = {
 
         desenharRodape();
 
+        if (docExterno) return doc;
+
         // ==========================================
         // SALVAR PDF
         // ==========================================
@@ -914,6 +930,33 @@ const ReportModule = {
         doc.save(nomeArquivo);
 
         debugLog('ReportModule: PDF gerado', nomeArquivo);
+    },
+
+    /**
+     * Junta várias cotações salvas num único PDF — cada uma começa em página
+     * nova, marcada "OPÇÃO N DE M" quando há mais de uma.
+     * @param {object[]} cotacoes — objetos no mesmo formato aceito por gerarCotacaoPDF
+     */
+    async gerarCotacoesPDF(cotacoes) {
+        if (!Array.isArray(cotacoes) || cotacoes.length === 0) return;
+        if (typeof jspdf === 'undefined' || typeof jspdf.jsPDF === 'undefined') {
+            alert('Biblioteca jsPDF não carregada. Verifique a conexão com a internet.');
+            return;
+        }
+        const { jsPDF } = jspdf;
+        const doc = new jsPDF();
+        const total = cotacoes.length;
+        for (let i = 0; i < total; i++) {
+            await this.gerarCotacaoPDF(cotacoes[i], {
+                doc,
+                novaPagina: i > 0,
+                titulo: total > 1 ? `OPÇÃO ${i + 1} DE ${total}` : null
+            });
+        }
+        const nomes = [...new Set(cotacoes.map(c => (c.cliente && c.cliente.nome) || '').filter(Boolean))];
+        const base = nomes.length === 1 ? nomes[0].replace(/\s+/g, '_') : 'Clientes';
+        const data = Formatter.date(new Date()).replace(/\//g, '-');
+        doc.save(`Cotacoes_${base}_${data}.pdf`);
     },
 
     /**

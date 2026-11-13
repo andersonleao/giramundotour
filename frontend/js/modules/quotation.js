@@ -675,19 +675,25 @@ const QuotationModule = {
             taxas:       taxaEmbarqueFinal,
             total:       totalFinal,
             validade:    validade.toISOString(),
-            observacoes: obsCliente
+            observacoes: obsCliente,
+            clienteNome: nome,
+            dadosPdf:    this._montarDadosPDF()
         };
 
         try {
-            const resp = await apiCall('/api/cotacoes', { method: 'POST', body: JSON.stringify(payload) });
+            // Já salva antes: atualiza em vez de criar outra
+            const jaSalva = !!this.cotacaoAtual.id;
+            const resp = await apiCall(jaSalva ? `/api/cotacoes/${this.cotacaoAtual.id}` : '/api/cotacoes', {
+                method: jaSalva ? 'PUT' : 'POST',
+                body: JSON.stringify(payload)
+            });
             if (!resp) return;
             const result = await resp.json();
             if (result.success) {
                 this.cotacaoAtual.id   = result.data.id;
                 this.cotacaoAtual.salva = true;
-                alert('Cotação salva com sucesso!');
-                if (confirm('Deseja gerar o PDF da cotação?')) {
-                    this.gerarPDF();
+                if (confirm('Cotação salva! Voltar para a Busca de Voos para cotar outra opção?\n\nNa Busca, em "Cotações salvas", você marca as opções e gera um PDF único.')) {
+                    App.navigate('busca');
                 }
             } else {
                 alert('Erro ao salvar cotação: ' + (result.message || 'Tente novamente.'));
@@ -703,13 +709,23 @@ const QuotationModule = {
     gerarPDF() {
         if (!this.cotacaoAtual) return;
 
-        const { nome, telefone } = this._lerDadosCliente();
+        const { nome } = this._lerDadosCliente();
         if (!nome) {
             alert('Informe o nome do cliente para gerar o PDF.');
             document.getElementById('cotacaoClienteNome')?.focus();
             return;
         }
 
+        ReportModule.gerarCotacaoPDF(this._montarDadosPDF());
+    },
+
+    /**
+     * Monta o objeto que o ReportModule usa para desenhar o PDF da cotação
+     * atual (cliente, preços personalizados, forma de pagamento, validade).
+     * Também é gravado em cotacoes."dadosPdf" para gerar o PDF depois.
+     */
+    _montarDadosPDF() {
+        const { nome, telefone } = this._lerDadosCliente();
         const dadosPDF = { ...this.cotacaoAtual };
         dadosPDF.cliente = { nome, telefone };
         dadosPDF.formaPagamento = this.cotacaoAtual.formaPagamento || null;
@@ -738,7 +754,7 @@ const QuotationModule = {
             dadosPDF.validade = validade.toISOString();
         }
 
-        ReportModule.gerarCotacaoPDF(dadosPDF);
+        return dadosPDF;
     },
 
     /**

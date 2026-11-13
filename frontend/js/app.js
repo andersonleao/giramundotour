@@ -122,6 +122,7 @@ const App = {
                 if (!document.getElementById('searchForm')) {
                     this.renderBuscaPage();
                 }
+                SearchModule.carregarCotacoesSalvas();
                 break;
 
             case 'cotacao':
