@@ -1431,7 +1431,8 @@ const ReportModule = {
         const contentWidth = pageWidth - margin * 2;
         let y = margin;
 
-        const todosBilhetes = (Storage.getBilhetes ? Storage.getBilhetes() : [])
+        // Outros trechos/passageiros do mesmo localizador vêm do cache da API em TicketsModule
+        const todosBilhetes = ((window.TicketsModule && TicketsModule._bilhetes) || [])
             .filter(b => b.codigoReserva === bilhete.codigoReserva);
         if (todosBilhetes.length === 0) todosBilhetes.push(bilhete);
 

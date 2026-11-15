@@ -223,7 +223,7 @@ const ClientsModule = {
         }
 
         tbody.innerHTML = clientes.map(cliente => {
-            const numCotacoes = cliente._count?.cotacoes || 0;
+            const numCotacoes = parseInt(cliente._countCotacoes ?? cliente._count?.cotacoes) || 0;
             return `
                 <tr>
                     <td>
@@ -339,7 +339,7 @@ const ClientsModule = {
         const cliente = this._clientes.find(c => c.id === id);
         if (!cliente) return;
 
-        const numCotacoes = cliente._count?.cotacoes || 0;
+        const numCotacoes = parseInt(cliente._countCotacoes ?? cliente._count?.cotacoes) || 0;
         let mensagem = `Deseja realmente excluir o cliente "${cliente.nome}"?`;
         if (numCotacoes > 0) {
             mensagem += `\n\nAtenção: Este cliente possui ${numCotacoes} cotação(ões) associada(s).`;
@@ -443,11 +443,11 @@ const ClientsModule = {
         modal.show();
     },
 
-    abrirCotacao(cotacaoId) {
+    async abrirCotacao(cotacaoId) {
         const modalHistorico = bootstrap.Modal.getInstance(document.getElementById('modalHistorico'));
         if (modalHistorico) modalHistorico.hide();
 
-        QuotationModule.carregarCotacao(cotacaoId);
+        await QuotationModule.carregarCotacao(cotacaoId);
         App.navigate('cotacao');
     }
 };

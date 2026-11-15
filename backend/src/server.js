@@ -36,6 +36,10 @@ const WHATSAPP_ENABLED = process.env.WHATSAPP_ENABLED === 'true';
 // Criar aplicação Express
 const app = express();
 
+// Render (e proxies em geral): req.ip passa a ser o IP real do cliente,
+// usado no limite de tentativas de login.
+app.set('trust proxy', 1);
+
 // =============================================
 // Middlewares Globais
 // =============================================

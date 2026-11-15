@@ -19,9 +19,9 @@ const upload = multer({
 });
 
 /**
- * POST /api/bilhetes/extract-pdf (sem auth)
+ * POST /api/bilhetes/extract-pdf (exige login)
  */
-router.post('/extract-pdf', upload.single('pdf'), async (req, res) => {
+router.post('/extract-pdf', authMiddleware, upload.single('pdf'), async (req, res) => {
     try {
         if (!req.file) {
             return res.status(400).json({ error: true, message: 'Nenhum arquivo PDF enviado' });

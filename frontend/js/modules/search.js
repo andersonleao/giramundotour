@@ -282,8 +282,10 @@ const SearchModule = {
             queryParams.append('companhia', params.companhia);
         }
 
-        const response = await fetch(`/api/voos/buscar?${queryParams.toString()}`);
-        if (!response.ok && response.status !== 200) {
+        // apiCall envia o token (a busca exige login) e trata sessão expirada
+        const response = await apiCall(`/api/voos/buscar?${queryParams.toString()}`);
+        if (!response) throw new Error('Sem conexão com o servidor ou sessão expirada');
+        if (!response.ok && response.status !== 400) {
             throw new Error(`Servidor retornou ${response.status}`);
         }
         const data = await response.json();

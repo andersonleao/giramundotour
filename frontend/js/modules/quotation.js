@@ -808,34 +808,44 @@ const QuotationModule = {
     },
 
     /**
-     * Carrega cotação existente
+     * Carrega cotação existente da API (antes lia do localStorage, que não
+     * guarda mais cotações — o "ver cotação" do histórico do cliente falhava).
      */
-    carregarCotacao(id) {
-        const cotacao = Storage.getCotacaoById(id);
+    async carregarCotacao(id) {
+        let cotacao = null;
+        try {
+            const resp = await apiCall(`/api/cotacoes/${id}`);
+            if (resp && resp.ok) cotacao = (await resp.json()).data;
+        } catch (_) { /* trata abaixo */ }
+
         if (!cotacao) {
             alert('Cotação não encontrada');
             return;
         }
 
-        const cliente = Storage.getClienteById(cotacao.clienteId);
+        // Cotação salva com o snapshot completo do PDF: reabre igual
+        if (cotacao.dadosPdf) {
+            this.abrirCotacaoSalva(cotacao.id, cotacao.dadosPdf);
+            return;
+        }
 
+        // Cotação antiga (só voos + totais): reconstrói e mantém o total gravado
         this.cotacaoAtual = {
             id: cotacao.id,
-            voos: cotacao.voos,
-            passageiros: cotacao.passageiros,
+            voos: Array.isArray(cotacao.voos) ? cotacao.voos : [],
+            passageiros: cotacao.passageiros || { adultos: 1, criancas: 0, bebes: 0 },
             clienteId: cotacao.clienteId,
-            cliente: cliente,
-            precos: {
-                subtotal: cotacao.subtotal,
-                taxas: cotacao.taxas,
-                total: cotacao.total
-            },
+            clienteNome: cotacao.cliente?.nome || cotacao.clienteNome || '',
             status: cotacao.status,
             validade: cotacao.validade,
-            dataCriacao: cotacao.dataCriacao,
+            dataCriacao: cotacao.createdAt,
+            tarifa: { tipo: 'Econômica', semReembolso: true },
             salva: true
         };
-
+        this.calcularPrecos();
+        if (cotacao.total != null) {
+            this.cotacaoAtual.valoresPersonalizados = { total: parseFloat(cotacao.total) };
+        }
         this.render();
     }
 };

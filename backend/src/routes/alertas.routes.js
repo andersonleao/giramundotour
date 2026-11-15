@@ -16,6 +16,11 @@
 const express        = require('express');
 const router         = express.Router();
 const AlertasService  = require('../services/alertas.service');
+const { authMiddleware } = require('../middleware/auth.middleware');
+
+// Todas as rotas exigem login: listam dados de clientes e disparam
+// mensagens pelo WhatsApp da agência.
+router.use(authMiddleware);
 
 const WHATSAPP_ENABLED = process.env.WHATSAPP_ENABLED === 'true';
 const WhatsAppService  = WHATSAPP_ENABLED ? require('../services/whatsapp.service') : null;

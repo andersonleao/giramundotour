@@ -54,7 +54,12 @@ const DashboardModule = {
             .slice(0, 5)
             .map(([codigo, count]) => ({ codigo, count }));
 
-        const totalClientes = Storage.getClientes().length;
+        // Total de clientes vem da API (o localStorage não guarda mais clientes)
+        let totalClientes = 0;
+        try {
+            const respCli = await apiCall('/api/clientes?limit=1');
+            if (respCli && respCli.ok) totalClientes = (await respCli.json()).pagination?.total || 0;
+        } catch (_) { /* mantém 0 */ }
 
         const stats = { totalClientes, totalCotacoes, cotacoesPendentes, valorMedio, topDestinos };
 

@@ -807,9 +807,26 @@ function extrairBilheteGol(apiData, pageText, pageHtml) {
 // Rota principal
 // ─────────────────────────────────────────────
 
-router.post('/capturar', async (req, res) => {
+// Domínios que o Puppeteer pode abrir. Sem essa lista a rota abria qualquer
+// endereço (inclusive a rede interna do servidor) e devolvia o conteúdo.
+const DOMINIOS_CAPTURA = ['voeazul.com.br', 'latamairlines.com', 'latam.com', 'voegol.com.br', 'flytap.com'];
+function urlCapturaPermitida(raw) {
+    try {
+        const u = new URL(raw);
+        if (u.protocol !== 'https:' && u.protocol !== 'http:') return false;
+        const host = u.hostname.toLowerCase();
+        return DOMINIOS_CAPTURA.some(d => host === d || host.endsWith('.' + d));
+    } catch (_) {
+        return false;
+    }
+}
+
+router.post('/capturar', authMiddleware, async (req, res) => {
     let { url } = req.body;
     if (!url) return res.status(400).json({ success: false, message: 'URL é obrigatória' });
+    if (!urlCapturaPermitida(url)) {
+        return res.status(400).json({ success: false, message: 'URL não permitida: use o link da reserva da Azul, GOL, LATAM ou TAP.' });
+    }
 
     console.log(`[Reservas] Capturando: ${url}`);
     let browser = null;

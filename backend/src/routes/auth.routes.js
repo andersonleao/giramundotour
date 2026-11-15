@@ -8,7 +8,27 @@ const bcrypt = require('bcryptjs');
 const { body, validationResult } = require('express-validator');
 const { pool } = require('../config/database');
 const { generateToken } = require('../config/jwt');
-const { authMiddleware } = require('../middleware/auth.middleware');
+const { authMiddleware, checkPerfil } = require('../middleware/auth.middleware');
+
+// Limite de tentativas de login (em memória): após MAX_FALHAS senhas erradas
+// do mesmo IP em JANELA_MS, novas tentativas recebem 429 até a janela passar.
+const MAX_FALHAS = 10;
+const JANELA_MS = 15 * 60 * 1000;
+const _falhasLogin = new Map(); // ip → { count, inicio }
+
+function _bloqueado(ip) {
+    const reg = _falhasLogin.get(ip);
+    if (!reg) return false;
+    if (Date.now() - reg.inicio > JANELA_MS) { _falhasLogin.delete(ip); return false; }
+    return reg.count >= MAX_FALHAS;
+}
+function _registrarFalha(ip) {
+    const reg = _falhasLogin.get(ip);
+    if (!reg || Date.now() - reg.inicio > JANELA_MS) _falhasLogin.set(ip, { count: 1, inicio: Date.now() });
+    else reg.count++;
+    // Evita crescer sem limite
+    if (_falhasLogin.size > 5000) _falhasLogin.clear();
+}
 
 /**
  * POST /api/auth/login
@@ -23,6 +43,11 @@ router.post('/login', [
             return res.status(400).json({ error: true, message: 'Dados inválidos', errors: errors.array() });
         }
 
+        const ip = req.ip;
+        if (_bloqueado(ip)) {
+            return res.status(429).json({ error: true, message: 'Muitas tentativas de login. Aguarde 15 minutos e tente novamente.' });
+        }
+
         const { email, senha } = req.body;
 
         const { rows } = await pool.query(
@@ -32,6 +57,7 @@ router.post('/login', [
 
         const usuario = rows[0];
         if (!usuario) {
+            _registrarFalha(ip);
             return res.status(401).json({ error: true, message: 'Email ou senha incorretos' });
         }
 
@@ -41,9 +67,11 @@ router.post('/login', [
 
         const senhaCorreta = await bcrypt.compare(senha, usuario.senha);
         if (!senhaCorreta) {
+            _registrarFalha(ip);
             return res.status(401).json({ error: true, message: 'Email ou senha incorretos' });
         }
 
+        _falhasLogin.delete(ip);
         const token = generateToken({ id: usuario.id, email: usuario.email, perfil: usuario.perfil });
 
         res.json({
@@ -69,8 +97,10 @@ router.post('/login', [
 
 /**
  * POST /api/auth/register
+ * Restrito a administradores logados: antes era público e aceitava
+ * perfil 'admin', permitindo que qualquer pessoa criasse uma conta admin.
  */
-router.post('/register', [
+router.post('/register', authMiddleware, checkPerfil('admin'), [
     body('nome').notEmpty().withMessage('Nome é obrigatório'),
     body('email').isEmail().withMessage('Email inválido'),
     body('senha').isLength({ min: 6 }).withMessage('Senha deve ter no mínimo 6 caracteres'),

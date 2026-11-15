@@ -6,7 +6,7 @@ const express = require('express');
 const router = express.Router();
 const { query, validationResult } = require('express-validator');
 const flightSearchService = require('../services/flightSearch.service');
-const { authMiddleware, optionalAuth } = require('../middleware/auth.middleware');
+const { authMiddleware } = require('../middleware/auth.middleware');
 const serpApiService       = require('../services/serpapi.service');
 const amadeusService       = require('../services/amadeus.service');
 const travelpayoutsService = require('../services/travelpayouts.service');
@@ -28,7 +28,7 @@ router.get('/buscar', [
     query('bebes').optional().isInt({ min: 0, max: 4 }).withMessage('Número de bebês inválido'),
     query('companhia').optional({ checkFalsy: true }).matches(/^[A-Za-z0-9]{2}$/).withMessage('Código IATA da companhia inválido'),
     query('classe').optional().isIn(['economica', 'executiva', 'primeira']).withMessage('Classe inválida')
-], optionalAuth, async (req, res) => {
+], authMiddleware, async (req, res) => {
     try {
         const errors = validationResult(req);
         if (!errors.isEmpty()) {

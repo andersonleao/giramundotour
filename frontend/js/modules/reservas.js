@@ -1643,9 +1643,8 @@ const ReservasModule = {
         // Busca telefone do cliente no cache local
         const cliente = this._clientes.find(c => c.id === reserva.clienteId);
         const clienteTelefone = reserva.clienteTelefone || cliente?.telefone || '';
-        fetch('/api/alertas/registrar', {
+        apiCall('/api/alertas/registrar', {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
                 id:              reserva.id,
                 companhia:       reserva.companhia,
@@ -1662,7 +1661,7 @@ const ReservasModule = {
     },
 
     _removerAlerta(reservaId) {
-        fetch(`/api/alertas/${reservaId}`, { method: 'DELETE' })
+        apiCall(`/api/alertas/${reservaId}`, { method: 'DELETE' })
             .catch(err => console.warn('[Alertas] Erro ao remover:', err.message));
     },
 
@@ -2621,8 +2620,8 @@ const ReservasModule = {
 
     async _atualizarPainelWpp() {
         try {
-            const resp = await fetch('/api/alertas/whatsapp/status');
-            if (!resp.ok) return;
+            const resp = await apiCall('/api/alertas/whatsapp/status');
+            if (!resp || !resp.ok) return;
             const data = await resp.json();
             this._renderPainelWpp(data);
         } catch (_) {}
@@ -2682,7 +2681,7 @@ const ReservasModule = {
             // Abre o modal imediatamente (QR chega via polling em até ~15s)
             this._abrirModalQR();
             // Dispara a conexão em background
-            fetch('/api/alertas/whatsapp/conectar', { method: 'POST' })
+            apiCall('/api/alertas/whatsapp/conectar', { method: 'POST' })
                 .catch(err => console.warn('[WhatsApp] Erro ao conectar:', err.message));
         } catch (err) {
             alert('Erro ao iniciar conexão: ' + err.message);
@@ -2692,7 +2691,7 @@ const ReservasModule = {
     async desconectarWpp() {
         if (!confirm('Desconectar o WhatsApp? A sessão será apagada e será necessário escanear o QR novamente.')) return;
         try {
-            await fetch('/api/alertas/whatsapp/desconectar', { method: 'POST' });
+            await apiCall('/api/alertas/whatsapp/desconectar', { method: 'POST' });
             this._atualizarPainelWpp();
         } catch (err) {
             alert('Erro ao desconectar: ' + err.message);
@@ -2711,7 +2710,8 @@ const ReservasModule = {
 
         const atualizar = async () => {
             try {
-                const resp = await fetch('/api/alertas/whatsapp/status');
+                const resp = await apiCall('/api/alertas/whatsapp/status');
+                if (!resp) return;
                 const data = await resp.json();
                 const container = document.getElementById('wppQRContainer');
                 if (!container) { clearInterval(this._wppQRInterval); return; }
@@ -2763,9 +2763,8 @@ const ReservasModule = {
         if (btn) { btn.disabled = true; btn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span>Enviando...'; }
 
         try {
-            const resp = await fetch('/api/alertas/whatsapp/testar', {
+            const resp = await apiCall('/api/alertas/whatsapp/testar', {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ telefone, texto })
             });
             const data = await resp.json();

@@ -5,6 +5,10 @@
 const jwt = require('jsonwebtoken');
 
 const JWT_SECRET = process.env.JWT_SECRET || 'giramundotour_secret_key';
+if (!process.env.JWT_SECRET) {
+    // A chave padrão está no repositório: com ela qualquer um assina tokens válidos.
+    console.warn('⚠️  JWT_SECRET não definido — usando chave padrão INSEGURA. Defina JWT_SECRET no ambiente (Render → Environment).');
+}
 const JWT_EXPIRES_IN = process.env.JWT_EXPIRES_IN || '24h';
 
 /**

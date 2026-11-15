@@ -856,8 +856,10 @@ const TicketsModule = {
         const formData = new FormData();
         formData.append('pdf', file);
 
+        // FormData: não usa apiCall (que força Content-Type JSON); envia o token à mão
         const response = await fetch('/api/bilhetes/extract-pdf', {
             method: 'POST',
+            headers: { 'Authorization': 'Bearer ' + (localStorage.getItem('giramundo_token') || '') },
             body: formData
         });
 
