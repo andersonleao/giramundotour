@@ -1155,6 +1155,23 @@ const ReportModule = {
             doc.text(`Página ${doc.internal.getNumberOfPages()}`, pageWidth - margin, fy, { align: 'right' });
         };
 
+        // Forma de pagamento da opção (mesmas taxas do PDF padrão da cotação)
+        const TAXAS_PRESENCIAL = [4, 5.00, 6, 6.67, 7.4, 8.5, 9, 10, 11, 11.16];
+        const TAXAS_MP         = [5.24, 10.58, 12.29, 14.03, 15.79, 17.56, 19.36, 21.18, 23.01, 24.86];
+        const textoPagamento = (c, total) => {
+            const pix = `PIX à vista (sem acréscimo): ${Formatter.currency(total)}`;
+            if (c.formaPagamento === 'pix') return pix;
+            if (c.formaPagamento !== 'cartao') return `A combinar  |  ${pix}`;
+            const mp = c.subtipoCartao === 'mercadopago';
+            const taxas = mp ? TAXAS_MP : TAXAS_PRESENCIAL;
+            const n = Math.min(Math.max(parseInt(c.parcelasSelecionadas) || 10, 1), 10);
+            const totalCartao = Math.round(total * (1 + taxas[n - 1] / 100) * 100) / 100;
+            const parcela = Math.round(totalCartao / n * 100) / 100;
+            const modalidade = mp ? 'via link Mercado Pago' : 'na maquininha';
+            const prefixo = c.parcelasSelecionadas ? '' : 'até ';
+            return `Cartão de crédito ${modalidade}: ${prefixo}${n}x de ${Formatter.currency(parcela)} = ${Formatter.currency(totalCartao)}  |  ${pix}`;
+        };
+
         // ── Grade ────────────────────────────────────────────────
         const rowH = 9;
         const limiteY = pageHeight - 16;
@@ -1164,7 +1181,9 @@ const ReportModule = {
         cotacoes.forEach((c, i) => {
             const voos = (Array.isArray(c.voos) ? c.voos : []);
             const linhas = voos.length ? voos : [{}];
-            const grupoH = linhas.length * rowH;
+            const voosH = linhas.length * rowH;
+            const pagH = 6.5;                 // faixa da forma de pagamento
+            const grupoH = voosH + pagH;
 
             if (y + grupoH > limiteY) {
                 desenharRodape();
@@ -1220,27 +1239,42 @@ const ReportModule = {
                 });
             });
 
-            // Colunas agrupadas (centralizadas na altura do grupo)
+            // Colunas agrupadas (centralizadas na altura dos voos)
             doc.setFontSize(9);
             doc.setFont('helvetica', 'bold');
             doc.setTextColor(...primaryColor);
-            textoCelula(cols[0], String(i + 1), y, grupoH);
+            textoCelula(cols[0], String(i + 1), y, voosH);
             doc.setFontSize(7.5);
             doc.setFont('helvetica', 'normal');
             // Tarifa em duas linhas: tipo + reembolso
             const colTarifa = cols.find(cc => cc.key === 'tarifa');
             const semReemb = tarifa.semReembolso !== false;
             doc.setTextColor(60, 60, 60);
-            textoCelula(colTarifa, tarifa.tipo || 'Econômica', y - 2, grupoH);
+            textoCelula(colTarifa, tarifa.tipo || 'Econômica', y - 2, voosH);
             doc.setFontSize(6.5);
             doc.setTextColor(...(semReemb ? [185, 40, 50] : [39, 103, 73]));
-            textoCelula(colTarifa, semReemb ? 'Sem reembolso' : 'Reembolsável', y + 2, grupoH);
+            textoCelula(colTarifa, semReemb ? 'Sem reembolso' : 'Reembolsável', y + 2, voosH);
             doc.setFontSize(7.5);
             doc.setTextColor(50, 50, 50);
-            textoCelula(cols.find(cc => cc.key === 'pessoa'), Formatter.currency(porPessoa(c)), y, grupoH);
+            textoCelula(cols.find(cc => cc.key === 'pessoa'), Formatter.currency(porPessoa(c)), y, voosH);
             doc.setFont('helvetica', 'bold');
             doc.setTextColor(...primaryColor);
-            textoCelula(cols.find(cc => cc.key === 'total'), Formatter.currency(total), y, grupoH);
+            textoCelula(cols.find(cc => cc.key === 'total'), Formatter.currency(total), y, voosH);
+
+            // Faixa da forma de pagamento (largura total, abaixo dos voos)
+            const py = y + voosH;
+            doc.setDrawColor(215, 222, 232);
+            doc.setLineWidth(0.1);
+            doc.line(margin, py, margin + larguraTabela, py);
+            doc.setFillColor(232, 245, 233);
+            doc.rect(margin + 0.2, py + 0.2, larguraTabela - 0.4, pagH - 0.4, 'F');
+            doc.setFontSize(7);
+            doc.setFont('helvetica', 'bold');
+            doc.setTextColor(27, 94, 32);
+            doc.text('Pagamento:', margin + 3, py + 4.4);
+            doc.setFont('helvetica', 'normal');
+            doc.setTextColor(50, 50, 50);
+            doc.text(ajustar(textoPagamento(c, total), larguraTabela - 22), margin + 18, py + 4.4);
 
             // Borda do grupo
             doc.setDrawColor(190, 200, 215);
