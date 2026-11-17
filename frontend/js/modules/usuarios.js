@@ -8,7 +8,6 @@ const UsuariosModule = {
     // Rótulos amigáveis para os menus (chave = key do data-page)
     MENU_LABELS: {
         busca:         { label: 'Buscar Voos',    icon: 'bi-search' },
-        dashboard:     { label: 'Dashboard',      icon: 'bi-speedometer2' },
         cotacao:       { label: 'Cotação',        icon: 'bi-file-earmark-text' },
         bilhetes:      { label: 'Bilhetes',       icon: 'bi-ticket-perforated' },
         reservas:      { label: 'Reservas',       icon: 'bi-bookmark-check' },

@@ -16,11 +16,9 @@ const App = {
         SuppliersModule.init();
         TicketsModule.init();
         ReservasModule.init();
-        ImportacaoModule.init();
         HoteisModule.init();
         MonitoramentoModule.init();
         UsuariosModule.init();
-        DashboardModule.init();
         DocumentosModule.init();
         ReportModule.init();
 
@@ -75,6 +73,11 @@ const App = {
      */
     navigate(page, updateHash = true) {
         debugLog('App: Navegando para', page);
+
+        // Página inexistente (ex.: link antigo #dashboard / #importacao) → primeira permitida
+        if (page && !document.getElementById(`page-${page}`)) {
+            return this.navigate(this.getFirstAllowedPage(), true);
+        }
 
         // Bloqueia navegação para página sem permissão
         if (page && !this.hasAccess(page)) {
@@ -150,10 +153,6 @@ const App = {
                 ReservasModule.render();
                 break;
 
-            case 'importacao':
-                ImportacaoModule.render();
-                break;
-
             case 'hoteis':
                 HoteisModule.render();
                 break;
@@ -164,10 +163,6 @@ const App = {
 
             case 'usuarios':
                 UsuariosModule.render();
-                break;
-
-            case 'dashboard':
-                DashboardModule.render();
                 break;
 
             case 'pacotes':
@@ -229,7 +224,7 @@ const App = {
      * Retorna a primeira página que o usuário pode acessar
      */
     getFirstAllowedPage() {
-        const ordem = ['busca', 'dashboard', 'cotacao', 'pacotes', 'documentos', 'bilhetes', 'faturas', 'reservas', 'hoteis', 'monitoramento', 'clientes', 'fornecedores', 'usuarios'];
+        const ordem = ['busca', 'cotacao', 'pacotes', 'documentos', 'bilhetes', 'faturas', 'reservas', 'hoteis', 'monitoramento', 'clientes', 'fornecedores', 'usuarios'];
         for (const p of ordem) {
             if (this.hasAccess(p)) return p;
         }

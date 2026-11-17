@@ -20,7 +20,7 @@ const { authMiddleware, checkPerfil } = require('../middleware/auth.middleware')
 
 const PERFIS_VALIDOS = ['admin', 'gerente', 'operador'];
 const MENUS_VALIDOS = [
-    'busca', 'dashboard', 'cotacao', 'bilhetes', 'reservas',
+    'busca', 'cotacao', 'bilhetes', 'reservas',
     'hoteis', 'monitoramento', 'clientes', 'fornecedores', 'usuarios'
 ];
 
