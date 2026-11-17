@@ -15,7 +15,6 @@ const App = {
         ClientsModule.init();
         SuppliersModule.init();
         TicketsModule.init();
-        ReservasModule.init();
         HoteisModule.init();
         MonitoramentoModule.init();
         UsuariosModule.init();
@@ -149,10 +148,6 @@ const App = {
                 FaturasModule.render();
                 break;
 
-            case 'reservas':
-                ReservasModule.render();
-                break;
-
             case 'hoteis':
                 HoteisModule.render();
                 break;
@@ -224,7 +219,7 @@ const App = {
      * Retorna a primeira página que o usuário pode acessar
      */
     getFirstAllowedPage() {
-        const ordem = ['busca', 'cotacao', 'pacotes', 'documentos', 'bilhetes', 'faturas', 'reservas', 'hoteis', 'monitoramento', 'clientes', 'fornecedores', 'usuarios'];
+        const ordem = ['busca', 'cotacao', 'pacotes', 'documentos', 'bilhetes', 'faturas', 'hoteis', 'monitoramento', 'clientes', 'fornecedores', 'usuarios'];
         for (const p of ordem) {
             if (this.hasAccess(p)) return p;
         }

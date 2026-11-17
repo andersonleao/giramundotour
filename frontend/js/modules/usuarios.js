@@ -10,7 +10,6 @@ const UsuariosModule = {
         busca:         { label: 'Buscar Voos',    icon: 'bi-search' },
         cotacao:       { label: 'Cotação',        icon: 'bi-file-earmark-text' },
         bilhetes:      { label: 'Bilhetes',       icon: 'bi-ticket-perforated' },
-        reservas:      { label: 'Reservas',       icon: 'bi-bookmark-check' },
         hoteis:        { label: 'Hotéis',         icon: 'bi-hotel' },
         monitoramento: { label: 'Monitoramento',  icon: 'bi-graph-down-arrow' },
         clientes:      { label: 'Clientes',       icon: 'bi-people' },

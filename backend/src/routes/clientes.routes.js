@@ -203,17 +203,6 @@ router.put('/:id', async (req, res) => {
  */
 router.delete('/:id', async (req, res) => {
     try {
-        const { rows: reservas } = await pool.query(
-            'SELECT id FROM reservas WHERE "clienteId" = $1 LIMIT 1',
-            [req.params.id]
-        );
-        if (reservas.length > 0) {
-            return res.status(400).json({
-                success: false,
-                message: 'Não é possível excluir este cliente pois existem reservas ativas vinculadas a ele.'
-            });
-        }
-
         await pool.query(
             'UPDATE clientes SET ativo = false, "updatedAt" = NOW() WHERE id = $1',
             [req.params.id]

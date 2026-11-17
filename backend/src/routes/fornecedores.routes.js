@@ -155,17 +155,6 @@ router.put('/:id', async (req, res) => {
  */
 router.delete('/:id', async (req, res) => {
     try {
-        const { rows: reservas } = await pool.query(
-            'SELECT id FROM reservas WHERE "fornecedorId" = $1 LIMIT 1',
-            [req.params.id]
-        );
-        if (reservas.length > 0) {
-            return res.status(400).json({
-                success: false,
-                message: 'Não é possível excluir este fornecedor pois existem reservas vinculadas a ele.'
-            });
-        }
-
         const { rowCount } = await pool.query(
             'DELETE FROM fornecedores WHERE id = $1',
             [req.params.id]

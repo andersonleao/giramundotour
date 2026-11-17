@@ -19,17 +19,12 @@ const fornecedoresRoutes = require('./routes/fornecedores.routes');
 const bilhetesRoutes = require('./routes/bilhetes.routes');
 const cotacoesRoutes = require('./routes/cotacoes.routes');
 const voosRoutes = require('./routes/voos.routes');
-const reservasRoutes  = require('./routes/reservas.routes');
-const alertasRoutes   = require('./routes/alertas.routes');
 const airlinesRoutes  = require('./routes/airlines.routes');
 const hotéisRoutes    = require('./routes/hoteis.routes');
 const monitoramentosRoutes = require('./routes/monitoramentos.routes');
 const pacotesRoutes        = require('./routes/pacotes.routes');
 const documentosRoutes     = require('./routes/documentos.routes');
-const AlertasService  = require('./services/alertas.service');
 const MonitoramentoService = require('./services/monitoramento.service');
-
-const WHATSAPP_ENABLED = process.env.WHATSAPP_ENABLED === 'true';
 
 // Criar aplicação Express
 const app = express();
@@ -96,8 +91,6 @@ app.use(`${API_PREFIX}/fornecedores`, fornecedoresRoutes);
 app.use(`${API_PREFIX}/bilhetes`, bilhetesRoutes);
 app.use(`${API_PREFIX}/cotacoes`, cotacoesRoutes);
 app.use(`${API_PREFIX}/voos`, voosRoutes);
-app.use(`${API_PREFIX}/reservas`, reservasRoutes);
-app.use(`${API_PREFIX}/alertas`,  alertasRoutes);
 app.use(`${API_PREFIX}/airlines`, airlinesRoutes);
 app.use(`${API_PREFIX}/hoteis`,   hotéisRoutes);
 app.use(`${API_PREFIX}/monitoramentos`, monitoramentosRoutes);
@@ -138,15 +131,6 @@ app.use((err, req, res, next) => {
 // =============================================
 
 const PORT = process.env.PORT || 3000;
-
-// Iniciar serviço de alertas de check-in (email)
-AlertasService.iniciar();
-
-// WhatsApp: ativo somente se WHATSAPP_ENABLED=true nas variáveis de ambiente
-if (WHATSAPP_ENABLED) {
-    const WhatsAppService = require('./services/whatsapp.service');
-    WhatsAppService.iniciar();
-}
 
 // Iniciar serviço de monitoramento de preços (cria tabelas + cron)
 MonitoramentoService.iniciar().catch(err => console.error('[Monitoramento] erro ao iniciar:', err));
