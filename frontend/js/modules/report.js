@@ -918,17 +918,25 @@ const ReportModule = {
         doc.setTextColor(100, 100, 100);
 
         const termos = [
-            '• Os preços podem sofrer alterações sem aviso prévio, sujeitos à disponibilidade.',
-            '• Após a confirmação, as regras de cancelamento e alteração são definidas pela companhia aérea.',
+            '• Estes são os voos mais econômicos encontrados para as datas pesquisadas, na data de emissão desta cotação.',
+            '• Tarifas, horários e disponibilidade podem ser alterados a qualquer momento pela companhia aérea, sem aviso prévio; os valores só ficam garantidos após a emissão.',
+            qtdBagagens > 0
+                ? `• Bagagem despachada: inclui ${qtdBagagens} ${qtdBagagens > 1 ? 'bagagens' : 'bagagem'} de 23kg, conforme o resumo de valores.`
+                : '• Bagagem despachada não incluída: a tarifa dá direito apenas à bagagem de mão. A bagagem de 23kg pode ser contratada à parte.',
+            semReembolso
+                ? '• Tarifa sem reembolso: em caso de cancelamento não há devolução do valor pago; alterações sujeitas a multa e diferença tarifária.'
+                : '• Após a confirmação, as regras de cancelamento e alteração são definidas pela companhia aérea.',
             '• Documentação válida é de responsabilidade do passageiro.',
-            '• Recomendamos check-in online e chegada ao aeroporto com 2h de antecedência (voos domésticos) ou 3h (internacionais).',
-            '• A bagagem despachada segue as regras da tarifa contratada.'
+            '• Recomendamos check-in online e chegada ao aeroporto com 2h de antecedência (voos domésticos) ou 3h (internacionais).'
         ];
 
         termos.forEach(termo => {
-            if (y > pageHeight - 28) { quebraPagina(); }
-            doc.text(termo, margin, y);
-            y += 5;
+            doc.splitTextToSize(termo, contentWidth).forEach(linha => {
+                if (y > pageHeight - 28) { quebraPagina(); }
+                doc.text(linha, margin, y);
+                y += 4.2;
+            });
+            y += 0.8;
         });
 
         // ==========================================
@@ -1050,6 +1058,34 @@ const ReportModule = {
             const segs = Array.isArray(v.segmentos) ? v.segmentos : [];
             const hubs = segs.length > 1 ? segs.slice(0, -1).map(s => s.destino).filter(Boolean) : [];
             return `${n} ${n === 1 ? 'escala' : 'escalas'}${hubs.length ? ' (' + hubs.join(', ') + ')' : ''}`;
+        };
+        // Detalhe de cada escala: aeroporto, chegada, saída e tempo de conexão
+        const conexoesTxt = (v) => {
+            const segs = Array.isArray(v.segmentos) ? v.segmentos : [];
+            if (segs.length < 2) return [];
+            const out = [];
+            for (let k = 0; k < segs.length - 1; k++) {
+                const a = segs[k], b = segs[k + 1];
+                const hub = a.destino || b.origem || '';
+                const cid = cidade(hub);
+                const tA = a.chegada ? new Date(a.chegada) : null;
+                const tB = b.partida ? new Date(b.partida) : null;
+                const okA = tA && !isNaN(tA), okB = tB && !isNaN(tB);
+                const espera = okA && okB ? Math.round((tB - tA) / 60000) : 0;
+                const num = String(b.numeroVoo || '');
+                const prox = (b.companhia && !num.toUpperCase().startsWith(String(b.companhia).toUpperCase()) ? b.companhia + ' ' : '') + num;
+                const partes = [`${segs.length > 2 ? 'Escala ' + (k + 1) : 'Escala'} em ${hub}${cid ? ' (' + cid + ')' : ''}`];
+                if (okA) partes.push(`chega ${Formatter.time(a.chegada)}`);
+                if (okB) partes.push(`sai ${Formatter.time(b.partida)}`);
+                if (espera > 0) partes.push(`conexão de ${fmtDur(espera)}`);
+                if (prox) partes.push(`voo seguinte ${prox}`);
+                out.push(partes.join('  ·  '));
+            }
+            return out;
+        };
+        const bagagemTxt = (c) => {
+            const q = Number((c.precos || {}).qtdBagagens) || 0;
+            return q > 0 ? `${q} ${q > 1 ? 'bagagens' : 'bagagem'} 23kg` : 'Só bagagem de mão';
         };
         const ajustar = (txt, larg) => {
             // Corta o texto para caber na coluna (com reticências)
@@ -1181,7 +1217,11 @@ const ReportModule = {
         cotacoes.forEach((c, i) => {
             const voos = (Array.isArray(c.voos) ? c.voos : []);
             const linhas = voos.length ? voos : [{}];
-            const voosH = linhas.length * rowH;
+            const subH = 4.6;                 // sub-linha de cada escala
+            const conexoes = linhas.map(v => (v.origem ? conexoesTxt(v) : []));
+            const alturas = conexoes.map(cs => rowH + cs.length * subH);
+            const topos = alturas.map((_, k) => alturas.slice(0, k).reduce((s, h) => s + h, 0));
+            const voosH = alturas.reduce((s, h) => s + h, 0);
             const pagH = 6.5;                 // faixa da forma de pagamento
             const grupoH = voosH + pagH;
 
@@ -1201,7 +1241,7 @@ const ReportModule = {
             const tarifa = c.tarifa || {};
 
             linhas.forEach((v, li) => {
-                const ly = y + li * rowH;
+                const ly = y + topos[li];
                 const tipo = v.tipo === 'volta' || (li > 0 && !v.tipo) ? 'Volta' : 'Ida';
                 const cia = [v.companhiaNome || v.companhia || '', v.numeroVoo || ''].filter(Boolean).join(' ');
                 const dPlus = v.dataChegada ? diasEntre(v.dataPartida, v.dataChegada) : 0;
@@ -1237,6 +1277,22 @@ const ReportModule = {
                     doc.setFont('helvetica', ['partida', 'chegada'].includes(cc.key) ? 'bold' : 'normal');
                     textoCelula(cc, valores[cc.key], ly, rowH);
                 });
+
+                // Sub-linhas com o detalhe de cada escala
+                if (conexoes[li].length) {
+                    const xIni = cols.find(cc => cc.key === 'cia').x + 1.8;
+                    const xFim = cols.find(cc => cc.key === 'tarifa').x - 1.8;
+                    doc.setFontSize(6.6);
+                    doc.setFont('helvetica', 'normal');
+                    doc.setTextColor(130, 80, 0);
+                    conexoes[li].forEach((t, k) => {
+                        const sy = ly + rowH + k * subH;
+                        doc.setFillColor(255, 248, 225);
+                        doc.rect(xIni - 1.6, sy - 0.6, xFim - xIni + 3.2, subH - 0.4, 'F');
+                        doc.text(ajustar('• ' + t, xFim - xIni), xIni, sy + 2.6);
+                    });
+                    doc.setTextColor(50, 50, 50);
+                }
             });
 
             // Colunas agrupadas (centralizadas na altura dos voos)
@@ -1246,14 +1302,17 @@ const ReportModule = {
             textoCelula(cols[0], String(i + 1), y, voosH);
             doc.setFontSize(7.5);
             doc.setFont('helvetica', 'normal');
-            // Tarifa em duas linhas: tipo + reembolso
+            // Tarifa em três linhas: tipo + reembolso + bagagem despachada
             const colTarifa = cols.find(cc => cc.key === 'tarifa');
             const semReemb = tarifa.semReembolso !== false;
+            doc.setFontSize(7);
             doc.setTextColor(60, 60, 60);
-            textoCelula(colTarifa, tarifa.tipo || 'Econômica', y - 2, voosH);
-            doc.setFontSize(6.5);
+            textoCelula(colTarifa, tarifa.tipo || 'Econômica', y - 2.9, voosH);
+            doc.setFontSize(6.2);
             doc.setTextColor(...(semReemb ? [185, 40, 50] : [39, 103, 73]));
-            textoCelula(colTarifa, semReemb ? 'Sem reembolso' : 'Reembolsável', y + 2, voosH);
+            textoCelula(colTarifa, semReemb ? 'Sem reembolso' : 'Reembolsável', y + 0.1, voosH);
+            doc.setTextColor(90, 90, 90);
+            textoCelula(colTarifa, bagagemTxt(c), y + 3.1, voosH);
             doc.setFontSize(7.5);
             doc.setTextColor(50, 50, 50);
             textoCelula(cols.find(cc => cc.key === 'pessoa'), Formatter.currency(porPessoa(c)), y, voosH);
@@ -1296,6 +1355,41 @@ const ReportModule = {
             doc.text(Formatter.currency(somaTotal), pageWidth - margin - 1.8, y + 6, { align: 'right' });
             y += 9;
         }
+
+        // ── Informações importantes ──────────────────────────────
+        const algumaComBagagem = cotacoes.some(c => (Number((c.precos || {}).qtdBagagens) || 0) > 0);
+        const todasSemReembolso = cotacoes.every(c => (c.tarifa || {}).semReembolso !== false);
+        const avisos = [
+            'Estes são os voos mais econômicos encontrados para as datas pesquisadas, na data de emissão desta cotação.',
+            'Tarifas, horários e disponibilidade de assentos podem ser alterados a qualquer momento pela companhia aérea, sem aviso prévio; os valores só ficam garantidos após a emissão.',
+            algumaComBagagem
+                ? 'Bagagem despachada: incluída somente nas opções em que está indicada na coluna Tarifa (23kg por bagagem). Nas demais, apenas bagagem de mão.'
+                : 'Bagagem despachada não incluída: as tarifas cotadas dão direito apenas à bagagem de mão. A bagagem despachada (23kg) pode ser contratada à parte.',
+            todasSemReembolso
+                ? 'Tarifas sem reembolso: em caso de cancelamento não há devolução do valor pago; alterações estão sujeitas a multa e diferença tarifária.'
+                : 'Opções marcadas como Sem reembolso não têm devolução em caso de cancelamento; alterações estão sujeitas a multa e diferença tarifária.',
+            'Voos com escala: o tempo de conexão indicado é o previsto pela companhia; verifique a necessidade de visto ou trânsito nos países de conexão.'
+        ];
+        doc.setFontSize(7.2);
+        const largAviso = larguraTabela - 8;
+        const linhasAviso = avisos.map(a => doc.splitTextToSize('• ' + a, largAviso));
+        const alturaAviso = 9 + linhasAviso.reduce((s, l) => s + l.length * 3.4, 0) + 2;
+        y += 4;
+        if (y + alturaAviso > limiteY) { desenharRodape(); doc.addPage(); y = desenharCabecalho() + 4; }
+        doc.setFillColor(255, 251, 235);
+        doc.setDrawColor(237, 137, 54);
+        doc.setLineWidth(0.3);
+        doc.roundedRect(margin, y, larguraTabela, alturaAviso, 2, 2, 'FD');
+        doc.setFont('helvetica', 'bold');
+        doc.setFontSize(8.5);
+        doc.setTextColor(116, 66, 16);
+        doc.text('INFORMAÇÕES IMPORTANTES', margin + 4, y + 5.5);
+        doc.setFont('helvetica', 'normal');
+        doc.setFontSize(7.2);
+        doc.setTextColor(70, 60, 40);
+        let ay = y + 10;
+        linhasAviso.forEach(l => { doc.text(l, margin + 4, ay); ay += l.length * 3.4; });
+        y += alturaAviso;
 
         desenharRodape();
 
