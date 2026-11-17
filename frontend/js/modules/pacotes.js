@@ -1052,7 +1052,7 @@ const PacotesModule = {
                 bebes:    +v('fBebes')    || 0,
                 companhia: '',
             },
-            ida: [], volta: [], selIda: null, selVolta: null, carregando: false, erro: '', buscou: false,
+            ida: [], volta: [], selIda: null, selVolta: null, carregando: false, erro: '', buscou: false, ordem: 'preco',
         };
         this._renderizarServicos();
         document.getElementById('bv_origem')?.focus();
@@ -1104,7 +1104,8 @@ const PacotesModule = {
                 classe: 'economica', companhia: p.companhia,
             });
             if (this._buscaVoo !== b) return;   // painel fechado durante a busca
-            const ordenar = l => (l || []).filter(x => x.price > 0).sort((a, c) => a.price - c.price).slice(0, 20);
+            // Todos os voos com preço; a ordem de exibição (preço/horário) é escolhida no painel
+            const ordenar = l => (l || []).filter(x => x.price > 0).sort((a, c) => a.price - c.price);
             b.ida = ordenar(r.ida);
             b.volta = p.dataVolta ? ordenar(r.volta) : [];
             b.selIda = b.ida[0]?.id ?? null;
@@ -1117,6 +1118,15 @@ const PacotesModule = {
             b.buscou = true;
             if (this._buscaVoo === b) this._renderizarServicos();
         }
+    },
+
+    ordenarBuscaVoos(ordem) {
+        const b = this._buscaVoo;
+        if (!b) return;
+        this._syncServicosFromDOM();
+        this._lerParamsBusca();
+        b.ordem = ordem;
+        this._renderizarServicos();
     },
 
     _selecionarVooBusca(tipo, id) {
@@ -1285,12 +1295,17 @@ const PacotesModule = {
                 <input type="number" id="${id}" class="form-control form-control-sm text-center" min="${min}" value="${val}">
             </div>`;
 
-        const listaVoos = (tipo, lista, sel) => {
-            if (!lista.length) return '';
+        const hhmm = v => `${v.departureDate || ''} ${String(v.departureTime || '').padStart(5, '0')}`;
+        const ordenada = l => b.ordem === 'horario'
+            ? [...l].sort((a, c) => hhmm(a).localeCompare(hhmm(c)) || a.price - c.price)
+            : l;
+        const listaVoos = (tipo, lista0, sel) => {
+            if (!lista0.length) return '';
+            const lista = ordenada(lista0);
             return `
                 <div class="col-lg-6">
-                    <div class="small fw-semibold mb-1">${tipo === 'ida' ? 'Ida' : 'Volta'} — ${lista.length} opções (menor preço primeiro)</div>
-                    <div class="list-group" style="max-height:260px;overflow:auto">
+                    <div class="small fw-semibold mb-1">${tipo === 'ida' ? 'Ida' : 'Volta'} — ${lista.length} ${lista.length === 1 ? 'opção' : 'opções'} (${b.ordem === 'horario' ? 'por horário de partida' : 'menor preço primeiro'})</div>
+                    <div class="list-group" style="max-height:380px;overflow:auto">
                         ${lista.map(v => `
                         <label class="list-group-item list-group-item-action d-flex align-items-center gap-2 py-1 small">
                             <input class="form-check-input mt-0" type="radio" name="bv_sel_${tipo}" ${v.id === sel ? 'checked' : ''}
@@ -1346,6 +1361,15 @@ const PacotesModule = {
                 </div>
                 ${b.erro ? `<div class="alert alert-warning py-1 px-2 small mt-2 mb-0">${esc(b.erro)}</div>` : ''}
                 ${b.ida.length ? `
+                <div class="d-flex align-items-center gap-2 mt-2 small">
+                    <span class="text-muted">Ordenar por:</span>
+                    <div class="btn-group btn-group-sm">
+                        <button type="button" class="btn ${b.ordem !== 'horario' ? 'btn-primary' : 'btn-outline-primary'}"
+                                onclick="PacotesModule.ordenarBuscaVoos('preco')"><i class="bi bi-currency-dollar me-1"></i>Preço</button>
+                        <button type="button" class="btn ${b.ordem === 'horario' ? 'btn-primary' : 'btn-outline-primary'}"
+                                onclick="PacotesModule.ordenarBuscaVoos('horario')"><i class="bi bi-clock me-1"></i>Horário</button>
+                    </div>
+                </div>
                 <div class="row g-2 mt-1">
                     ${listaVoos('ida', b.ida, b.selIda)}
                     ${listaVoos('volta', b.volta, b.selVolta)}
