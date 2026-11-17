@@ -81,6 +81,7 @@ const AIRPORTS = [
     { code: 'BGY', name: 'Milan Bergamo Airport', city: 'Bérgamo', country: 'Itália', countryCode: 'IT', metro: 'Milão' },
     { code: 'LIS', name: 'Lisbon Portela Airport', city: 'Lisboa', country: 'Portugal', countryCode: 'PT' },
     { code: 'OPO', name: 'Porto Airport', city: 'Porto', country: 'Portugal', countryCode: 'PT' },
+    { code: 'SPU', name: 'Split Airport', city: 'Split', country: 'Croácia', countryCode: 'HR' },
     { code: 'ZRH', name: 'Zurich Airport', city: 'Zurique', country: 'Suíça', countryCode: 'CH' },
     { code: 'SXB', name: 'Strasbourg Airport', city: 'Estrasburgo', country: 'França', countryCode: 'FR' },
     { code: 'IST', name: 'Istanbul Airport', city: 'Istambul', country: 'Turquia', countryCode: 'TR', metro: 'Istambul' },

@@ -170,6 +170,7 @@ router.get('/aeroportos', async (req, res) => {
         // Internacionais - Europa
         { codigo: 'LIS', cidade: 'Lisboa', nome: 'Humberto Delgado', uf: '', pais: 'Portugal' },
         { codigo: 'OPO', cidade: 'Porto', nome: 'Francisco Sá Carneiro', uf: '', pais: 'Portugal' },
+        { codigo: 'SPU', cidade: 'Split', nome: 'Split Airport', uf: '', pais: 'Croácia' },
         { codigo: 'MAD', cidade: 'Madri', nome: 'Adolfo Suárez Madrid-Barajas', uf: '', pais: 'Espanha' },
         { codigo: 'BCN', cidade: 'Barcelona', nome: 'El Prat', uf: '', pais: 'Espanha' },
         { codigo: 'CDG', cidade: 'Paris', nome: 'Charles de Gaulle', uf: '', pais: 'França' },

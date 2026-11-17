@@ -649,7 +649,7 @@ class FlightSearchService {
 
         // Detecta região do destino para escolher parceiros de codeshare LATAM coerentes.
         const aeroportosUS = new Set(['JFK','LGA','EWR','LAX','BUR','LGB','ORD','MDW','ATL','DFW','DAL','SFO','OAK','SJC','MCO','BOS','IAD','DCA','BWI','LAS','MIA','SEA','DEN','PHX','SAN','HNL','IAH']);
-        const aeroportosEU = new Set(['LHR','LGW','STN','LCY','CDG','ORY','FRA','AMS','MAD','BCN','FCO','CIA','MXP','LIN','BGY','LIS','OPO','ZRH','SXB','MUC','DUB','BRU','VIE','CPH','ARN','HEL']);
+        const aeroportosEU = new Set(['LHR','LGW','STN','LCY','CDG','ORY','FRA','AMS','MAD','BCN','FCO','CIA','MXP','LIN','BGY','LIS','OPO','ZRH','SXB','MUC','DUB','BRU','VIE','CPH','ARN','HEL','SPU']);
         const destRegion = aeroportosUS.has(params.destino) ? 'US'
                          : aeroportosEU.has(params.destino) ? 'EU' : null;
 
@@ -959,6 +959,7 @@ class FlightSearchService {
             'CDG': { lat: 49.01, lon: 2.55 },    'LHR': { lat: 51.47, lon: -0.46 },
             'FCO': { lat: 41.80, lon: 12.25 },   'MAD': { lat: 40.47, lon: -3.56 },
             'LIS': { lat: 38.77, lon: -9.13 },   'OPO': { lat: 41.24, lon: -8.68 },
+            'SPU': { lat: 43.54, lon: 16.30 },
             'AMS': { lat: 52.31, lon: 4.76 },    'FRA': { lat: 50.04, lon: 8.56 },
             'BCN': { lat: 41.30, lon: 2.08 },    'MXP': { lat: 45.63, lon: 8.72 },
             'ZRH': { lat: 47.46, lon: 8.55 },    'RAI': { lat: 14.94, lon: -23.49 },
