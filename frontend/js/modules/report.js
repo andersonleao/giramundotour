@@ -1222,8 +1222,7 @@ const ReportModule = {
             const alturas = conexoes.map(cs => rowH + cs.length * subH);
             const topos = alturas.map((_, k) => alturas.slice(0, k).reduce((s, h) => s + h, 0));
             const voosH = alturas.reduce((s, h) => s + h, 0);
-            const pagH = 6.5;                 // faixa da forma de pagamento
-            const grupoH = voosH + pagH;
+            const grupoH = voosH;
 
             if (y + grupoH > limiteY) {
                 desenharRodape();
@@ -1320,21 +1319,6 @@ const ReportModule = {
             doc.setTextColor(...primaryColor);
             textoCelula(cols.find(cc => cc.key === 'total'), Formatter.currency(total), y, voosH);
 
-            // Faixa da forma de pagamento (largura total, abaixo dos voos)
-            const py = y + voosH;
-            doc.setDrawColor(215, 222, 232);
-            doc.setLineWidth(0.1);
-            doc.line(margin, py, margin + larguraTabela, py);
-            doc.setFillColor(232, 245, 233);
-            doc.rect(margin + 0.2, py + 0.2, larguraTabela - 0.4, pagH - 0.4, 'F');
-            doc.setFontSize(7);
-            doc.setFont('helvetica', 'bold');
-            doc.setTextColor(27, 94, 32);
-            doc.text('Pagamento:', margin + 3, py + 4.4);
-            doc.setFont('helvetica', 'normal');
-            doc.setTextColor(50, 50, 50);
-            doc.text(ajustar(textoPagamento(c, total), larguraTabela - 22), margin + 18, py + 4.4);
-
             // Borda do grupo
             doc.setDrawColor(190, 200, 215);
             doc.setLineWidth(0.2);
@@ -1355,6 +1339,42 @@ const ReportModule = {
             doc.text(Formatter.currency(somaTotal), pageWidth - margin - 1.8, y + 6, { align: 'right' });
             y += 9;
         }
+
+        // ── Forma de pagamento (uma vez só, para todas as opções) ──
+        // Cartão: uma condição por modalidade (sem repetir); PIX aparece uma vez só
+        const condicaoCartao = (c) => {
+            if (c.formaPagamento !== 'cartao') return null;
+            const mp = c.subtipoCartao === 'mercadopago';
+            const n = Math.min(Math.max(parseInt(c.parcelasSelecionadas) || 10, 1), 10);
+            return `Cartão de crédito ${mp ? 'via link Mercado Pago' : 'na maquininha'}: em até ${n}x, com acréscimo conforme o número de parcelas`;
+        };
+        let textoPag;
+        if (cotacoes.length === 1) {
+            textoPag = textoPagamento(cotacoes[0], totalDaCotacao(cotacoes[0]));
+        } else {
+            const cartoes = [...new Set(cotacoes.map(condicaoCartao).filter(Boolean))];
+            const soPix = cotacoes.every(c => c.formaPagamento === 'pix');
+            const partes = ['PIX à vista, sem acréscimo, pelo valor da coluna Total'];
+            if (cartoes.length) partes.push(...cartoes);
+            else if (!soPix) partes.push('Cartão de crédito: condições a combinar');
+            textoPag = partes.join('  |  ');
+        }
+        doc.setFontSize(7.5);
+        const linhasPag = doc.splitTextToSize(textoPag, larguraTabela - 40);
+        const pagH = 4 + linhasPag.length * 3.6;
+        y += 3;
+        if (y + pagH > limiteY) { desenharRodape(); doc.addPage(); y = desenharCabecalho() + 3; }
+        doc.setFillColor(232, 245, 233);
+        doc.setDrawColor(56, 161, 105);
+        doc.setLineWidth(0.3);
+        doc.roundedRect(margin, y, larguraTabela, pagH, 2, 2, 'FD');
+        doc.setFont('helvetica', 'bold');
+        doc.setTextColor(27, 94, 32);
+        doc.text('Forma de pagamento:', margin + 4, y + 4.9);
+        doc.setFont('helvetica', 'normal');
+        doc.setTextColor(50, 50, 50);
+        doc.text(linhasPag, margin + 35, y + 4.9);
+        y += pagH;
 
         // ── Informações importantes ──────────────────────────────
         const algumaComBagagem = cotacoes.some(c => (Number((c.precos || {}).qtdBagagens) || 0) > 0);
