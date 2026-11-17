@@ -1235,10 +1235,43 @@ const PacotesModule = {
                             <i class="bi bi-airplane me-1"></i>Voos ${voos.length ? '(saem em grade no PDF)' : ''}
                         </div>
                         ${tabelaVoos}
+                        ${voos.length ? this._htmlPagamentoAereo(s, i) : ''}
                         ${botoes}
                         ${b ? this._htmlPainelBusca(b) : ''}
                     </div>
                 </div>`;
+    },
+
+    // Forma de pagamento do aéreo na grade do PDF (mesmos campos do hotel)
+    _htmlPagamentoAereo(s, i) {
+        return `
+            <div class="row g-2 align-items-end mb-2">
+                <div class="col-md-4 col-12">
+                    <div class="form-check form-switch mb-1">
+                        <input class="form-check-input" type="checkbox" id="svc_pag_${i}" ${s.mostrarPagamento !== false ? 'checked' : ''}
+                               onchange="PacotesModule._onServicoChange(${i},'mostrarPagamento',this.checked)">
+                        <label class="form-check-label small" for="svc_pag_${i}">
+                            <i class="bi bi-credit-card me-1"></i>Forma de pagamento na grade do PDF
+                        </label>
+                    </div>
+                </div>
+                <div class="col-md-4 col-6">
+                    <label class="form-label small text-muted mb-1">Taxas do cartão</label>
+                    <select id="svc_cartao_${i}" class="form-select form-select-sm"
+                            onchange="PacotesModule._onServicoChange(${i},'cartaoModalidade',this.value)">
+                        <option value="presencial" ${s.cartaoModalidade === 'presencial' ? 'selected' : ''}>Maquininha (presencial)</option>
+                        <option value="mercadopago" ${s.cartaoModalidade !== 'presencial' ? 'selected' : ''}>Link Mercado Pago</option>
+                    </select>
+                </div>
+                <div class="col-md-4 col-6">
+                    <label class="form-label small text-muted mb-1">Parcelar em até</label>
+                    <select id="svc_parc_${i}" class="form-select form-select-sm"
+                            onchange="PacotesModule._onServicoChange(${i},'parcelasMax',this.value)">
+                        ${[1,2,3,4,5,6,7,8,9,10].map(n =>
+                            `<option value="${n}" ${(+s.parcelasMax || 10) === n ? 'selected' : ''}>${n}x</option>`).join('')}
+                    </select>
+                </div>
+            </div>`;
     },
 
     _htmlPainelBusca(b) {
@@ -2361,7 +2394,19 @@ const PacotesModule = {
             let cx = mg;
             cols.forEach(c => { c.x = cx; cx += c.w; });
 
-            const ROW = 8, HEAD = 7.5, FAIXA = 6.5;
+            const ROW = 8, HEAD = 7.5, FAIXA = 6.5, PAG = 6.5;
+            // Forma de pagamento do aéreo (mesmas taxas da Cotação): PIX à vista + cartão parcelado
+            const temPag = s => s.mostrarPagamento !== false && +s.valorTotal > 0;
+            const textoPagamento = s => {
+                const tot = +s.valorTotal || 0;
+                const pix = `PIX à vista (sem acréscimo): ${this._fmtMoeda(tot)}`;
+                const parcelas = this._parcelamento(tot, s.cartaoModalidade, s.parcelasMax);
+                const ult = parcelas[parcelas.length - 1];
+                if (!ult || !(ult.total > 0)) return pix;
+                const modalidade = s.cartaoModalidade === 'presencial' ? 'na maquininha' : 'via link Mercado Pago';
+                const prefixo = ult.n > 1 ? 'até ' : '';
+                return `${pix}   |   Cartão de crédito ${modalidade}: ${prefixo}${ult.n}x de ${this._fmtMoeda(ult.parcela)} = ${this._fmtMoeda(ult.total)}`;
+            };
             const celula = (c, s, yy, h, o = {}) => {
                 fonte(o.size || 7, o.bold ? 'bold' : 'normal');
                 const t = cortar(limpar(s), c.w - 2);
@@ -2389,12 +2434,12 @@ const PacotesModule = {
                 return `${n} ${n === 1 ? 'escala' : 'escalas'}${hubs.length ? ' (' + hubs.join(', ') + ')' : ''}`;
             };
 
-            const primeiroH = HEAD + aereosComVoos[0].voos.length * ROW + FAIXA;
+            const primeiroH = HEAD + aereosComVoos[0].voos.length * ROW + FAIXA + (temPag(aereosComVoos[0]) ? PAG : 0);
             secao('Voos', plural(aereosComVoos.reduce((a, s) => a + s.voos.length, 0), 'trecho'), primeiroH);
             cabecalhoGrade();
 
             aereosComVoos.forEach((s, gi) => {
-                const grupoH = s.voos.length * ROW + FAIXA;
+                const grupoH = s.voos.length * ROW + FAIXA + (temPag(s) ? PAG : 0);
                 if (y + grupoH > LIMITE) { doc.addPage(); _header(); y = TOPO; cabecalhoGrade(); }
                 const y0 = y;
                 doc.setFillColor(...(gi % 2 === 0 ? [255, 255, 255] : FUNDO));
@@ -2433,6 +2478,16 @@ const PacotesModule = {
                     { size: 7, bold: true, cor: semReemb ? [185, 40, 50] : [39, 103, 73] });
                 txt(`Por pessoa: ${this._fmtMoeda(tot / nPax)}   |   Total (${plural(nPax, 'passageiro')}): ${this._fmtMoeda(tot)}`,
                     mg + cw - 3, fy + 4.4, { size: 7, bold: true, cor: TEXTO, align: 'right' });
+
+                // Faixa da forma de pagamento (abaixo da tarifa)
+                if (temPag(s)) {
+                    const py = fy + FAIXA;
+                    doc.setDrawColor(...LINHA); doc.setLineWidth(0.15);
+                    doc.line(mg, py, mg + cw, py);
+                    txt('Pagamento:', mg + 3, py + 4.4, { size: 7, bold: true, cor: NAVY });
+                    fonte(7, 'normal');
+                    txt(cortar(textoPagamento(s), cw - 22), mg + 18, py + 4.4, { size: 7, cor: TEXTO });
+                }
 
                 doc.setDrawColor(190, 200, 215); doc.setLineWidth(0.2);
                 doc.rect(mg, y0, cw, grupoH, 'D');
