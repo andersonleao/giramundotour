@@ -1772,6 +1772,12 @@ const PacotesModule = {
         const servicos = (Array.isArray(p.servicos) ? p.servicos : []).map(s => {
             const n = this._normalizarServico(s);
             ['descricao', 'fornecedor', 'caracteristicas'].forEach(k => { n[k] = limpar(n[k]); });
+            // O PDF já mostra o rótulo "Aéreo" ao lado/acima da descrição: tira o
+            // "Aéreo" do início dela para não sair "Aéreo Aéreo GRU – RAI..."
+            if (n.tipo === 'aereo' && n.descricao) {
+                const semPrefixo = n.descricao.replace(/^\s*a[ée]reo\b\s*[-–—:]?\s*/i, '');
+                if (semPrefixo.trim()) n.descricao = semPrefixo;
+            }
             return n;
         });
         // Hotéis desmarcados ("Incluir no orçamento") não entram no roteiro nem no total:
