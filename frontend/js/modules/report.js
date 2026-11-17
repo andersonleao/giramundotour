@@ -1052,8 +1052,12 @@ const ReportModule = {
             return Math.round((ub - ua) / 86400000);
         };
         const cidade = (code) => (getAirportByCode(code) || {}).city || '';
+        const numEscalas = (v) => {
+            const segs = Array.isArray(v.segmentos) ? v.segmentos : [];
+            return Math.max(Number(v.escalas ?? v.stops) || 0, segs.length > 1 ? segs.length - 1 : 0);
+        };
         const escalasTxt = (v) => {
-            const n = Number(v.escalas) || 0;
+            const n = numEscalas(v);
             if (!n) return 'Direto';
             const segs = Array.isArray(v.segmentos) ? v.segmentos : [];
             const hubs = segs.length > 1 ? segs.slice(0, -1).map(s => s.destino).filter(Boolean) : [];
@@ -1062,7 +1066,11 @@ const ReportModule = {
         // Detalhe de cada escala: aeroporto, chegada, saída e tempo de conexão
         const conexoesTxt = (v) => {
             const segs = Array.isArray(v.segmentos) ? v.segmentos : [];
-            if (segs.length < 2) return [];
+            if (segs.length < 2) {
+                // A fonte informou escala(s) mas não o aeroporto: avisa em vez de omitir
+                const n = numEscalas(v);
+                return n ? [`${n === 1 ? 'Voo com 1 escala' : `Voo com ${n} escalas`}  ·  aeroporto e tempo de conexão não informados pela companhia — confirmar na emissão`] : [];
+            }
             const out = [];
             for (let k = 0; k < segs.length - 1; k++) {
                 const a = segs[k], b = segs[k + 1];

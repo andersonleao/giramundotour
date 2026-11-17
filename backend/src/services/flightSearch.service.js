@@ -1140,6 +1140,12 @@ class FlightSearchService {
             const seen = new Map(); // chave → voo preferido
             const fonteOrder = ['google_flights', 'smiles', 'iberia', 'skyscanner', 'travelpayouts', 'airlabs', 'aviationstack'];
             const prioFonte = (f) => { const i = fonteOrder.indexOf(f); return i === -1 ? 99 : i; };
+            // Qualidade do detalhe das escalas: 0 = sem segmentos, 1 = só aeroportos, 2 = com horários
+            const qualSegs = (v) => {
+                const s = Array.isArray(v?.segmentos) ? v.segmentos : [];
+                if (s.length < 2) return 0;
+                return s.every(x => x.partida && x.chegada) ? 2 : 1;
+            };
             for (const lista of listas) {
                 if (!Array.isArray(lista)) continue;
                 for (const v of lista) {
@@ -1148,9 +1154,12 @@ class FlightSearchService {
                     const escalasV = v.escalas ?? 0;
                     const chave = `${v.origem?.codigo}-${v.destino?.codigo}-${v.partida?.horario}-${cia}-${escalasV}`;
                     const existing = seen.get(chave);
-                    if (!existing || prioFonte(v.fonte) < prioFonte(existing.fonte)) {
-                        seen.set(chave, v);
-                    }
+                    if (!existing) { seen.set(chave, v); continue; }
+                    const [fica, sai] = prioFonte(v.fonte) < prioFonte(existing.fonte) ? [v, existing] : [existing, v];
+                    // Mantém o voo da fonte preferida, mas aproveita o detalhe de escalas
+                    // da duplicata quando ele é mais completo (ex.: Smiles sem horários x Google)
+                    if (escalasV > 0 && qualSegs(sai) > qualSegs(fica)) fica.segmentos = sai.segmentos;
+                    seen.set(chave, fica);
                 }
             }
             return Array.from(seen.values()).sort((a, b) => a.preco.valor - b.preco.valor);
