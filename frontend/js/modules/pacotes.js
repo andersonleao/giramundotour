@@ -2564,46 +2564,6 @@ const PacotesModule = {
             y += 4;
         }
 
-        // ── Resumo de valores ──
-        if (servicos.length) {
-            // Mantém tabela e total juntos quando cabem numa página
-            const resumoH = roteiro.length * 7 + (markup > 0 ? 14 : 2) + 18;
-            secao('Resumo de valores', null, Math.min(resumoH, LIMITE - TOPO - 14));
-            roteiro.forEach((s, k) => {
-                _checkPage(7);
-                const t = tipoInfo(s.tipo);
-                if (k % 2 === 0) { doc.setFillColor(...FUNDO); doc.rect(mg, y, cw, 7, 'F'); }
-                doc.setFillColor(...rgb(t.cor));
-                doc.circle(mg + 4, y + 3.5, 1.2, 'F');
-                txt(s.tipo === 'hotel' ? 'Hospedagem' : t.label, mg + 8, y + 4.8, { size: 8.5, bold: true, cor: TEXTO });
-                fonte(8.5);
-                txt(cortar(s.descricao || '', cw - 75), mg + 34, y + 4.8, { size: 8.5, cor: CINZA });
-                txt(this._fmtMoeda(+s.valorTotal || 0), pw - mg - 4, y + 4.8, { size: 8.5, cor: TEXTO, align: 'right' });
-                y += 7;
-            });
-            y += 2;
-        }
-
-        _checkPage(markup > 0 ? 34 : 26);
-        if (markup > 0) {
-            txt('Subtotal', pw - mg - 50, y + 4, { size: 8.5, cor: CINZA, align: 'right' });
-            txt(this._fmtMoeda(subtotal), pw - mg - 4, y + 4, { size: 8.5, cor: TEXTO, align: 'right' });
-            txt(`Markup (${markup}%)`, pw - mg - 50, y + 9, { size: 8.5, cor: CINZA, align: 'right' });
-            txt(this._fmtMoeda(subtotal * markup / 100), pw - mg - 4, y + 9, { size: 8.5, cor: TEXTO, align: 'right' });
-            y += 12;
-        }
-        doc.setFillColor(...NAVY);
-        doc.roundedRect(mg, y, cw, 12, 2.5, 2.5, 'F');
-        txt('TOTAL DO PACOTE', mg + 6, y + 7.8, { size: 9, bold: true, cor: [255, 255, 255], esp: 0.3 });
-        txt(this._fmtMoeda(total), pw - mg - 6, y + 8.2, { size: 13, bold: true, cor: [255, 255, 255], align: 'right' });
-        y += 12;
-        if (pagantes > 1) {
-            txt(`Equivale a ${this._fmtMoeda(total / pagantes)} por pessoa (${plural(pagantes, 'pagante')})`,
-                pw - mg - 6, y + 5, { size: 7.5, cor: CINZA, align: 'right' });
-            y += 6;
-        }
-        y += 8;
-
         // ── Opções de hospedagem: cada hotel com o total do pacote se for o escolhido ──
         // Sem o roteiro, a hospedagem sai aqui mesmo com um hotel só (senão sumiria do PDF)
         const hotelUnico = !temOpcoes && !this.MOSTRAR_ROTEIRO && hoteis.length > 0;
@@ -2659,6 +2619,47 @@ const PacotesModule = {
             });
             y += 4;
         }
+
+        // Resumo de valores no fim, depois de todos os serviços (voos, aéreo e hospedagem)
+        // ── Resumo de valores ──
+        if (servicos.length) {
+            // Mantém tabela e total juntos quando cabem numa página
+            const resumoH = roteiro.length * 7 + (markup > 0 ? 14 : 2) + 18;
+            secao('Resumo de valores', null, Math.min(resumoH, LIMITE - TOPO - 14));
+            roteiro.forEach((s, k) => {
+                _checkPage(7);
+                const t = tipoInfo(s.tipo);
+                if (k % 2 === 0) { doc.setFillColor(...FUNDO); doc.rect(mg, y, cw, 7, 'F'); }
+                doc.setFillColor(...rgb(t.cor));
+                doc.circle(mg + 4, y + 3.5, 1.2, 'F');
+                txt(s.tipo === 'hotel' ? 'Hospedagem' : t.label, mg + 8, y + 4.8, { size: 8.5, bold: true, cor: TEXTO });
+                fonte(8.5);
+                txt(cortar(s.descricao || '', cw - 75), mg + 34, y + 4.8, { size: 8.5, cor: CINZA });
+                txt(this._fmtMoeda(+s.valorTotal || 0), pw - mg - 4, y + 4.8, { size: 8.5, cor: TEXTO, align: 'right' });
+                y += 7;
+            });
+            y += 2;
+        }
+
+        _checkPage(markup > 0 ? 34 : 26);
+        if (markup > 0) {
+            txt('Subtotal', pw - mg - 50, y + 4, { size: 8.5, cor: CINZA, align: 'right' });
+            txt(this._fmtMoeda(subtotal), pw - mg - 4, y + 4, { size: 8.5, cor: TEXTO, align: 'right' });
+            txt(`Markup (${markup}%)`, pw - mg - 50, y + 9, { size: 8.5, cor: CINZA, align: 'right' });
+            txt(this._fmtMoeda(subtotal * markup / 100), pw - mg - 4, y + 9, { size: 8.5, cor: TEXTO, align: 'right' });
+            y += 12;
+        }
+        doc.setFillColor(...NAVY);
+        doc.roundedRect(mg, y, cw, 12, 2.5, 2.5, 'F');
+        txt('TOTAL DO PACOTE', mg + 6, y + 7.8, { size: 9, bold: true, cor: [255, 255, 255], esp: 0.3 });
+        txt(this._fmtMoeda(total), pw - mg - 6, y + 8.2, { size: 13, bold: true, cor: [255, 255, 255], align: 'right' });
+        y += 12;
+        if (pagantes > 1) {
+            txt(`Equivale a ${this._fmtMoeda(total / pagantes)} por pessoa (${plural(pagantes, 'pagante')})`,
+                pw - mg - 6, y + 5, { size: 7.5, cor: CINZA, align: 'right' });
+            y += 6;
+        }
+        y += 8;
 
         // ── Observações ──
         if (p.observacoes) {
