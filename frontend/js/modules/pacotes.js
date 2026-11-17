@@ -2528,6 +2528,42 @@ const PacotesModule = {
             y += 8;
         }
 
+        // ── Detalhamento dos serviços aéreos ──
+        // Os cards do aéreo (composição do valor, taxas, regra da tarifa, itens)
+        // só saíam no "Roteiro da viagem", que está desligado (MOSTRAR_ROTEIRO).
+        // Sem o roteiro, eles ganham uma seção própria, como a hospedagem.
+        const aereos = this.MOSTRAR_ROTEIRO ? [] : roteiro.filter(s => s.tipo === 'aereo');
+        if (aereos.length) {
+            secao(aereos.length > 1 ? 'Detalhamento dos aéreos' : 'Detalhamento do aéreo',
+                aereos.length > 1 ? plural(aereos.length, 'serviço') : null,
+                cardServico(aereos[0], 0, false) + docJunto(aereos[0]) + 6);
+            const cor = rgb(tipoInfo('aereo').cor);
+            aereos.forEach((s, idx) => {
+                const hh = cardServico(s, y, false);
+                _checkPage(hh + docJunto(s));
+                const y0 = y;
+                // Número na coluna da esquerda só quando há mais de um aéreo
+                if (aereos.length > 1) {
+                    doc.setFillColor(...cor);
+                    doc.circle(mg + 9, y0 + 8, 5, 'F');
+                    txt(String(idx + 1), mg + 9, y0 + 10.2, { size: 12, bold: true, cor: [255, 255, 255], align: 'center' });
+                    txt('AÉREO', mg + 9, y0 + 17.5, { size: 6.5, bold: true, cor: CINZA, align: 'center' });
+                }
+
+                doc.setFillColor(...FUNDO);
+                doc.roundedRect(cardX + 0.5, y0 + 0.7, cardW, hh, 2.5, 2.5, 'F');
+                doc.setFillColor(255, 255, 255);
+                doc.setDrawColor(...LINHA); doc.setLineWidth(0.25);
+                doc.roundedRect(cardX, y0, cardW, hh, 2.5, 2.5, 'FD');
+                doc.setFillColor(...cor);
+                doc.roundedRect(cardX, y0, 1.4, hh, 0.7, 0.7, 'F');
+                cardServico(s, y0, true);
+                y = y0 + hh + 6;
+                desenharDocs(s);
+            });
+            y += 4;
+        }
+
         // ── Resumo de valores ──
         if (servicos.length) {
             // Mantém tabela e total juntos quando cabem numa página
