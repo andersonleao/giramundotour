@@ -237,6 +237,10 @@ const PacotesModule = {
                                         onclick="PacotesModule.adicionarServico('${t.value}')">
                                     <i class="bi ${t.icon} me-1" style="color:${t.cor}"></i>${t.label}
                                 </button>`).join('')}
+                            <button class="btn btn-sm btn-primary" title="Buscar voos e adicionar como serviço aéreo"
+                                    onclick="PacotesModule.buscarVoosNovoAereo()">
+                                <i class="bi bi-search me-1"></i>Buscar voos
+                            </button>
                         </div>
                     </div>
                     <div class="card-body bg-body-tertiary" id="listaServicos"></div>
@@ -462,6 +466,7 @@ const PacotesModule = {
     },
 
     _limparForm() {
+        this._buscaVoo = null;
         ['fClienteId','fClienteNome','fClienteEmail','fClienteTelefone',
          'fDestino','fNomeViagem','fDataPartida','fDataRetorno',
          'fAdultos','fCriancas','fBebes','fObservacoes','fSolicitante','fDescricao',
@@ -673,6 +678,7 @@ const PacotesModule = {
     },
 
     removerServico(idx) {
+        this._buscaVoo = null;   // índices mudam: fecha o painel de busca aberto
         this._servicos.splice(idx, 1);
         this._renderizarServicos();
         this._recalcular();
@@ -945,6 +951,8 @@ const PacotesModule = {
                     <small class="text-muted">Taxas por pessoa · Total = (tarifa + taxas) × passageiros</small>
                 </div>` : ''}`}
 
+                ${ehAereo ? this._htmlVoosServico(s, i) : ''}
+
                 <!-- Características -->
                 <div class="col-12">
                     <label class="form-label small text-muted mb-1">
@@ -1003,6 +1011,319 @@ const PacotesModule = {
                 </div>
             </div>
         </div>`;
+    },
+
+    // ── Busca de voos dentro do serviço Aéreo ───────────────────────
+    // Usa a mesma API da tela Buscar Voos (SearchModule._buscarSimples). Os voos
+    // escolhidos ficam em s.voos (mesmo formato da Cotação) e saem em grade no PDF.
+    _buscaVoo: null,   // { idx, params, ida[], volta[], selIda, selVolta, carregando, erro }
+
+    COMPANHIAS_BUSCA: [
+        ['', 'Todas'], ['LA', 'LATAM'], ['G3', 'GOL'], ['AD', 'Azul'], ['TP', 'TAP Air Portugal'],
+        ['VR', 'Cabo Verde Airlines'], ['IB', 'Iberia'], ['AF', 'Air France'], ['KL', 'KLM'],
+        ['LH', 'Lufthansa'], ['BA', 'British Airways'], ['AA', 'American Airlines'],
+        ['DL', 'Delta Air Lines'], ['UA', 'United Airlines'], ['CM', 'Copa Airlines'],
+        ['AV', 'Avianca'], ['AR', 'Aerolíneas Argentinas'],
+    ],
+
+    buscarVoosNovoAereo() {
+        this._syncServicosFromDOM();
+        this.adicionarServico('aereo');
+        this.abrirBuscaVoos(this._servicos.length - 1);
+    },
+
+    abrirBuscaVoos(idx) {
+        this._syncServicosFromDOM();
+        const s = this._servicos[idx];
+        if (!s) return;
+        const v = id => document.getElementById(id)?.value || '';
+        const voos = Array.isArray(s.voos) ? s.voos : [];
+        const ida = voos.find(x => x.tipo !== 'volta');
+        const volta = voos.find(x => x.tipo === 'volta');
+        this._buscaVoo = {
+            idx,
+            params: {
+                origem:   ida?.origem  || '',
+                destino:  ida?.destino || '',
+                dataIda:  (ida?.dataPartida || s.dataInicio || v('fDataPartida')).slice(0, 10),
+                dataVolta: (volta?.dataPartida || s.dataFim || v('fDataRetorno')).slice(0, 10),
+                adultos:  +v('fAdultos')  || 1,
+                criancas: +v('fCriancas') || 0,
+                bebes:    +v('fBebes')    || 0,
+                companhia: '',
+            },
+            ida: [], volta: [], selIda: null, selVolta: null, carregando: false, erro: '', buscou: false,
+        };
+        this._renderizarServicos();
+        document.getElementById('bv_origem')?.focus();
+    },
+
+    fecharBuscaVoos() {
+        this._syncServicosFromDOM();
+        this._buscaVoo = null;
+        this._renderizarServicos();
+    },
+
+    _lerParamsBusca() {
+        const b = this._buscaVoo;
+        if (!b) return;
+        const v = id => document.getElementById(id)?.value ?? '';
+        // Aceita o código (GRU) ou o nome da cidade (São Paulo → 1º aeroporto encontrado)
+        const code = id => {
+            const t = String(v(id)).trim();
+            if (/^[A-Za-z]{3}$/.test(t)) return t.toUpperCase();
+            const m = t.match(/\b([A-Z]{3})\b/);
+            if (m) return m[1];
+            const achados = t.length >= 3 && typeof searchAirports === 'function' ? searchAirports(t) : [];
+            return achados[0]?.code || '';
+        };
+        b.params = {
+            origem: code('bv_origem'), destino: code('bv_destino'),
+            dataIda: v('bv_ida'), dataVolta: v('bv_volta'),
+            adultos: +v('bv_adultos') || 1, criancas: +v('bv_criancas') || 0, bebes: +v('bv_bebes') || 0,
+            companhia: v('bv_cia'),
+        };
+    },
+
+    async executarBuscaVoos() {
+        const b = this._buscaVoo;
+        if (!b) return;
+        this._syncServicosFromDOM();
+        this._lerParamsBusca();
+        const p = b.params;
+        if (!p.origem || !p.destino) { App.showToast('Informe origem e destino (código IATA, ex.: GRU)', 'warning'); return; }
+        if (!p.dataIda) { App.showToast('Informe a data de ida', 'warning'); return; }
+        if (p.dataVolta && p.dataVolta < p.dataIda) { App.showToast('A volta não pode ser antes da ida', 'warning'); return; }
+
+        Object.assign(b, { carregando: true, erro: '', ida: [], volta: [], selIda: null, selVolta: null });
+        this._renderizarServicos();
+        try {
+            const r = await SearchModule._buscarSimples({
+                origem: p.origem, destino: p.destino, dataIda: p.dataIda, dataVolta: p.dataVolta || '',
+                passageiros: { adultos: p.adultos, criancas: p.criancas, bebes: p.bebes },
+                classe: 'economica', companhia: p.companhia,
+            });
+            if (this._buscaVoo !== b) return;   // painel fechado durante a busca
+            const ordenar = l => (l || []).filter(x => x.price > 0).sort((a, c) => a.price - c.price).slice(0, 20);
+            b.ida = ordenar(r.ida);
+            b.volta = p.dataVolta ? ordenar(r.volta) : [];
+            b.selIda = b.ida[0]?.id ?? null;
+            b.selVolta = b.volta[0]?.id ?? null;
+            if (!b.ida.length) b.erro = 'Nenhum voo encontrado para essa busca.';
+        } catch (e) {
+            b.erro = e.message || 'Erro ao buscar voos';
+        } finally {
+            b.carregando = false;
+            b.buscou = true;
+            if (this._buscaVoo === b) this._renderizarServicos();
+        }
+    },
+
+    _selecionarVooBusca(tipo, id) {
+        const b = this._buscaVoo;
+        if (!b) return;
+        if (tipo === 'ida') b.selIda = id; else b.selVolta = id;
+    },
+
+    // Converte o voo do resultado da busca para o formato da Cotação
+    _normalizarVooBusca(v, tipo) {
+        const dt = (d, h) => d ? `${d}T${h || '00:00'}:00` : '';
+        return {
+            tipo,
+            companhia: v.airline || '', companhiaNome: v.airlineName || v.airline || '',
+            numeroVoo: v.flightNumber || '',
+            origem: v.origin || '', destino: v.destination || '',
+            dataPartida: dt(v.departureDate, v.departureTime),
+            dataChegada: dt(v.arrivalDate || v.departureDate, v.arrivalTime),
+            duracao: +v.duration || 0,
+            escalas: +v.stops || 0,
+            segmentos: Array.isArray(v.segmentos)
+                ? v.segmentos.map(sg => ({ origem: sg.origem?.codigo || sg.origem || '', destino: sg.destino?.codigo || sg.destino || '' }))
+                : undefined,
+            preco: +v.price || 0,
+            precoTipo: v.precoTipo || null,
+        };
+    },
+
+    aplicarVoosBusca() {
+        const b = this._buscaVoo;
+        if (!b) return;
+        this._syncServicosFromDOM();
+        const s = this._servicos[b.idx];
+        const ida = b.ida.find(x => x.id === b.selIda);
+        if (!s || !ida) { App.showToast('Selecione o voo de ida', 'warning'); return; }
+        const volta = b.volta.find(x => x.id === b.selVolta);
+
+        s.voos = [this._normalizarVooBusca(ida, 'ida')];
+        if (volta) s.voos.push(this._normalizarVooBusca(volta, 'volta'));
+
+        const p = b.params;
+        const cias = [...new Set(s.voos.map(x => x.companhiaNome).filter(Boolean))].join(' / ');
+        const rota = `${ida.origin} – ${ida.destination}`;
+        s.descricao = `${rota}${volta ? ' (ida e volta)' : ' (somente ida)'}${cias ? ' — ' + cias : ''}`;
+        if (!s.fornecedor) s.fornecedor = cias;
+        s.dataInicio = (ida.departureDate || '').slice(0, 10);
+        s.dataFim = volta ? (volta.arrivalDate || volta.departureDate || '').slice(0, 10) : (ida.arrivalDate || ida.departureDate || '').slice(0, 10);
+        s.quantidade = (p.adultos || 1) + (p.criancas || 0) + (p.bebes || 0);
+        s.valorUnit = Math.round(((+ida.price || 0) + (+volta?.price || 0)) * 100) / 100;
+        s.valorTotal = s.quantidade * (s.valorUnit + this._taxasAereo(s));
+
+        this._buscaVoo = null;
+        this._renderizarServicos();
+        this._recalcular();
+        const estimado = [ida, volta].some(x => x && x.precoTipo === 'estimado');
+        App.showToast(estimado
+            ? 'Voos adicionados. Atenção: preço estimado — confira a tarifa antes de enviar.'
+            : 'Voos adicionados ao serviço aéreo', estimado ? 'warning' : 'success');
+    },
+
+    removerVoosServico(idx) {
+        this._syncServicosFromDOM();
+        const s = this._servicos[idx];
+        if (!s) return;
+        delete s.voos;
+        this._renderizarServicos();
+    },
+
+    _fmtDuracao(min) {
+        min = Math.round(+min || 0);
+        if (!min) return '—';
+        const h = Math.floor(min / 60), m = min % 60;
+        return h ? `${h}h${m ? String(m).padStart(2, '0') : ''}` : `${m}min`;
+    },
+
+    _htmlVoosServico(s, i) {
+        const esc = v => this._esc(v);
+        const b = this._buscaVoo && this._buscaVoo.idx === i ? this._buscaVoo : null;
+        const voos = Array.isArray(s.voos) ? s.voos : [];
+        const hora = d => d ? String(d).slice(11, 16) : '';
+
+        const tabelaVoos = voos.length ? `
+            <div class="table-responsive">
+                <table class="table table-sm table-bordered small mb-2 bg-white">
+                    <thead class="table-light"><tr>
+                        <th>Trecho</th><th>Cia / Voo</th><th>Data</th><th>Origem</th><th>Partida</th>
+                        <th>Destino</th><th>Chegada</th><th>Duração</th><th>Escalas</th>
+                    </tr></thead>
+                    <tbody>${voos.map(v => `
+                        <tr>
+                            <td class="fw-semibold ${v.tipo === 'volta' ? 'text-success' : 'text-primary'}">${v.tipo === 'volta' ? 'Volta' : 'Ida'}</td>
+                            <td>${esc(v.companhiaNome)} ${esc(v.numeroVoo)}</td>
+                            <td>${v.dataPartida ? this._fmtData(v.dataPartida) : ''}</td>
+                            <td>${esc(v.origem)}</td><td class="fw-semibold">${hora(v.dataPartida)}</td>
+                            <td>${esc(v.destino)}</td><td class="fw-semibold">${hora(v.dataChegada)}</td>
+                            <td>${this._fmtDuracao(v.duracao)}</td>
+                            <td>${+v.escalas ? v.escalas + (+v.escalas === 1 ? ' escala' : ' escalas') : 'Direto'}</td>
+                        </tr>`).join('')}
+                    </tbody>
+                </table>
+            </div>` : '';
+
+        const botoes = b ? '' : `
+            <div class="d-flex gap-2 flex-wrap">
+                <button class="btn btn-sm btn-outline-primary" type="button" onclick="PacotesModule.abrirBuscaVoos(${i})">
+                    <i class="bi bi-search me-1"></i>${voos.length ? 'Trocar voos' : 'Buscar voos'}
+                </button>
+                ${voos.length ? `<button class="btn btn-sm btn-outline-danger" type="button" onclick="PacotesModule.removerVoosServico(${i})">
+                    <i class="bi bi-x-circle me-1"></i>Remover voos</button>` : ''}
+            </div>`;
+
+        return `
+                <div class="col-12">
+                    <div class="border rounded p-2 bg-primary bg-opacity-10">
+                        <div class="small fw-semibold text-primary mb-2">
+                            <i class="bi bi-airplane me-1"></i>Voos ${voos.length ? '(saem em grade no PDF)' : ''}
+                        </div>
+                        ${tabelaVoos}
+                        ${botoes}
+                        ${b ? this._htmlPainelBusca(b) : ''}
+                    </div>
+                </div>`;
+    },
+
+    _htmlPainelBusca(b) {
+        const p = b.params;
+        const esc = v => this._esc(v);
+        const opcoesAero = (typeof AIRPORTS !== 'undefined' ? AIRPORTS : [])
+            .map(a => `<option value="${a.code}">${esc(a.city)} - ${esc(a.name)}</option>`).join('');
+        const num = (id, rot, val, min) => `
+            <div class="col-md-1 col-4">
+                <label class="form-label small text-muted mb-1">${rot}</label>
+                <input type="number" id="${id}" class="form-control form-control-sm text-center" min="${min}" value="${val}">
+            </div>`;
+
+        const listaVoos = (tipo, lista, sel) => {
+            if (!lista.length) return '';
+            return `
+                <div class="col-lg-6">
+                    <div class="small fw-semibold mb-1">${tipo === 'ida' ? 'Ida' : 'Volta'} — ${lista.length} opções (menor preço primeiro)</div>
+                    <div class="list-group" style="max-height:260px;overflow:auto">
+                        ${lista.map(v => `
+                        <label class="list-group-item list-group-item-action d-flex align-items-center gap-2 py-1 small">
+                            <input class="form-check-input mt-0" type="radio" name="bv_sel_${tipo}" ${v.id === sel ? 'checked' : ''}
+                                   onchange="PacotesModule._selecionarVooBusca('${tipo}', ${JSON.stringify(v.id).replace(/"/g, '&quot;')})">
+                            <span class="fw-semibold text-nowrap" style="min-width:90px">${esc(v.airlineName)} ${esc(v.flightNumber)}</span>
+                            <span class="text-nowrap">${esc(v.departureTime)} → ${esc(v.arrivalTime)}</span>
+                            <span class="text-muted text-nowrap">${this._fmtDuracao(v.duration)}</span>
+                            <span class="text-muted text-nowrap">${+v.stops ? v.stops + (+v.stops === 1 ? ' escala' : ' escalas') : 'Direto'}</span>
+                            <span class="ms-auto fw-bold text-primary text-nowrap">${this._fmtMoeda(v.price)}${v.precoTipo === 'estimado' ? ' <span class="badge bg-warning text-dark">estimado</span>' : ''}</span>
+                        </label>`).join('')}
+                    </div>
+                </div>`;
+        };
+
+        return `
+            <div class="bg-white border rounded p-2 mt-1">
+                <datalist id="bv_aeroportos">${opcoesAero}</datalist>
+                <div class="row g-2 align-items-end">
+                    <div class="col-md-2 col-6">
+                        <label class="form-label small text-muted mb-1">Origem</label>
+                        <input type="text" id="bv_origem" class="form-control form-control-sm text-uppercase" list="bv_aeroportos"
+                               placeholder="GRU" value="${esc(p.origem)}">
+                    </div>
+                    <div class="col-md-2 col-6">
+                        <label class="form-label small text-muted mb-1">Destino</label>
+                        <input type="text" id="bv_destino" class="form-control form-control-sm text-uppercase" list="bv_aeroportos"
+                               placeholder="LIS" value="${esc(p.destino)}">
+                    </div>
+                    <div class="col-md-2 col-6">
+                        <label class="form-label small text-muted mb-1">Ida</label>
+                        <input type="date" id="bv_ida" class="form-control form-control-sm" value="${esc(p.dataIda)}">
+                    </div>
+                    <div class="col-md-2 col-6">
+                        <label class="form-label small text-muted mb-1">Volta (opcional)</label>
+                        <input type="date" id="bv_volta" class="form-control form-control-sm" value="${esc(p.dataVolta)}">
+                    </div>
+                    ${num('bv_adultos', 'Adultos', p.adultos, 1)}
+                    ${num('bv_criancas', 'Crianças', p.criancas, 0)}
+                    ${num('bv_bebes', 'Bebês', p.bebes, 0)}
+                    <div class="col-md-2 col-6">
+                        <label class="form-label small text-muted mb-1">Companhia</label>
+                        <select id="bv_cia" class="form-select form-select-sm">
+                            ${this.COMPANHIAS_BUSCA.map(([c, n]) => `<option value="${c}" ${p.companhia === c ? 'selected' : ''}>${n}</option>`).join('')}
+                        </select>
+                    </div>
+                    <div class="col-12 d-flex gap-2">
+                        <button class="btn btn-sm btn-primary" type="button" ${b.carregando ? 'disabled' : ''}
+                                onclick="PacotesModule.executarBuscaVoos()">
+                            ${b.carregando ? '<span class="spinner-border spinner-border-sm me-1"></span>Buscando...' : '<i class="bi bi-search me-1"></i>Buscar'}
+                        </button>
+                        <button class="btn btn-sm btn-outline-secondary" type="button" onclick="PacotesModule.fecharBuscaVoos()">Cancelar</button>
+                    </div>
+                </div>
+                ${b.erro ? `<div class="alert alert-warning py-1 px-2 small mt-2 mb-0">${esc(b.erro)}</div>` : ''}
+                ${b.ida.length ? `
+                <div class="row g-2 mt-1">
+                    ${listaVoos('ida', b.ida, b.selIda)}
+                    ${listaVoos('volta', b.volta, b.selVolta)}
+                </div>
+                ${b.params.dataVolta && b.buscou && !b.volta.length ? '<div class="small text-muted mt-1">Nenhum voo de volta encontrado — será usado somente a ida.</div>' : ''}
+                <div class="d-flex justify-content-end mt-2">
+                    <button class="btn btn-sm btn-success" type="button" onclick="PacotesModule.aplicarVoosBusca()">
+                        <i class="bi bi-check2-circle me-1"></i>Usar voos selecionados
+                    </button>
+                </div>` : ''}
+            </div>`;
     },
 
     _toggleNoOrcamento(idx, incluir) {
@@ -2019,6 +2340,105 @@ const PacotesModule = {
                 });
                 y += galH + 7;
             });
+        }
+
+        // ── Voos em grade (serviços aéreos com voos vindos da busca) ──
+        const aereosComVoos = roteiro.filter(s => s.tipo === 'aereo' && Array.isArray(s.voos) && s.voos.length);
+        if (aereosComVoos.length) {
+            const cols = [
+                { k: 'trecho',  t: 'Trecho',    w: 12, a: 'center' },
+                { k: 'cia',     t: 'Cia / Voo', w: 32 },
+                { k: 'data',    t: 'Data',      w: 17, a: 'center' },
+                { k: 'origem',  t: 'Origem',    w: 23 },
+                { k: 'partida', t: 'Partida',   w: 13, a: 'center' },
+                { k: 'destino', t: 'Destino',   w: 23 },
+                { k: 'chegada', t: 'Chegada',   w: 15, a: 'center' },
+                { k: 'duracao', t: 'Duração',   w: 14, a: 'center' },
+                { k: 'escalas', t: 'Escalas',   w: 21 },
+            ];
+            const somaW = cols.reduce((a, c) => a + c.w, 0);
+            cols[cols.length - 1].w += cw - somaW;
+            let cx = mg;
+            cols.forEach(c => { c.x = cx; cx += c.w; });
+
+            const ROW = 8, HEAD = 7.5, FAIXA = 6.5;
+            const celula = (c, s, yy, h, o = {}) => {
+                fonte(o.size || 7, o.bold ? 'bold' : 'normal');
+                const t = cortar(limpar(s), c.w - 2);
+                const ty = yy + h / 2 + 1.2;
+                const x = c.a === 'center' ? c.x + c.w / 2 : c.x + 1.5;
+                txt(t, x, ty, { size: o.size || 7, bold: o.bold, cor: o.cor || TEXTO, align: c.a || 'left' });
+            };
+            const cabecalhoGrade = () => {
+                doc.setFillColor(...NAVY);
+                doc.rect(mg, y, cw, HEAD, 'F');
+                cols.forEach(c => celula(c, c.t, y, HEAD, { bold: true, cor: [255, 255, 255], size: 6.8 }));
+                y += HEAD;
+            };
+            const hhmm = d => (d && String(d).length >= 16) ? String(d).slice(11, 16) : '';
+            const dias = (a, b) => {
+                const da = Date.parse(String(a).slice(0, 10)), db = Date.parse(String(b).slice(0, 10));
+                return isNaN(da) || isNaN(db) ? 0 : Math.round((db - da) / 86400000);
+            };
+            const cidade = c => (typeof getAirportByCode === 'function' && getAirportByCode(c)?.city) || '';
+            const escalasTxt = v => {
+                const n = +v.escalas || 0;
+                if (!n) return 'Direto';
+                const segs = Array.isArray(v.segmentos) ? v.segmentos : [];
+                const hubs = segs.length > 1 ? segs.slice(0, -1).map(sg => sg.destino).filter(x => typeof x === 'string' && x) : [];
+                return `${n} ${n === 1 ? 'escala' : 'escalas'}${hubs.length ? ' (' + hubs.join(', ') + ')' : ''}`;
+            };
+
+            const primeiroH = HEAD + aereosComVoos[0].voos.length * ROW + FAIXA;
+            secao('Voos', plural(aereosComVoos.reduce((a, s) => a + s.voos.length, 0), 'trecho'), primeiroH);
+            cabecalhoGrade();
+
+            aereosComVoos.forEach((s, gi) => {
+                const grupoH = s.voos.length * ROW + FAIXA;
+                if (y + grupoH > LIMITE) { doc.addPage(); _header(); y = TOPO; cabecalhoGrade(); }
+                const y0 = y;
+                doc.setFillColor(...(gi % 2 === 0 ? [255, 255, 255] : FUNDO));
+                doc.rect(mg, y0, cw, grupoH, 'F');
+
+                s.voos.forEach((v, li) => {
+                    const ly = y0 + li * ROW;
+                    if (li > 0) { doc.setDrawColor(...LINHA); doc.setLineWidth(0.15); doc.line(mg, ly, mg + cw, ly); }
+                    const volta = v.tipo === 'volta';
+                    const dPlus = v.dataChegada ? dias(v.dataPartida, v.dataChegada) : 0;
+                    const val = {
+                        cia: [v.companhiaNome || v.companhia, v.numeroVoo].filter(Boolean).join(' '),
+                        data: v.dataPartida ? this._fmtData(v.dataPartida) : '',
+                        origem: `${v.origem || ''} ${cidade(v.origem)}`.trim(),
+                        partida: hhmm(v.dataPartida),
+                        destino: `${v.destino || ''} ${cidade(v.destino)}`.trim(),
+                        chegada: hhmm(v.dataChegada) + (dPlus > 0 ? ` +${dPlus}` : ''),
+                        duracao: this._fmtDuracao(v.duracao),
+                        escalas: escalasTxt(v),
+                    };
+                    celula(cols[0], volta ? 'Volta' : 'Ida', ly, ROW, { bold: true, cor: volta ? [39, 103, 73] : NAVY });
+                    cols.slice(1).forEach(c => celula(c, val[c.k], ly, ROW, { bold: c.k === 'partida' || c.k === 'chegada' }));
+                });
+
+                // Faixa com tarifa e valores do serviço aéreo
+                const fy = y0 + s.voos.length * ROW;
+                doc.setFillColor(232, 245, 233);
+                doc.rect(mg + 0.2, fy + 0.2, cw - 0.4, FAIXA - 0.4, 'F');
+                const nPax = +s.quantidade || 1;
+                const tot = +s.valorTotal || 0;
+                const semReemb = s.naoReembolsavel !== false;
+                txt('Tarifa Econômica', mg + 3, fy + 4.4, { size: 7, bold: true, cor: [27, 94, 32] });
+                fonte(7, 'bold');
+                const wT = doc.getTextWidth('Tarifa Econômica');
+                txt(semReemb ? '· Sem reembolso' : '· Reembolsável', mg + 4 + wT, fy + 4.4,
+                    { size: 7, bold: true, cor: semReemb ? [185, 40, 50] : [39, 103, 73] });
+                txt(`Por pessoa: ${this._fmtMoeda(tot / nPax)}   |   Total (${plural(nPax, 'passageiro')}): ${this._fmtMoeda(tot)}`,
+                    mg + cw - 3, fy + 4.4, { size: 7, bold: true, cor: TEXTO, align: 'right' });
+
+                doc.setDrawColor(190, 200, 215); doc.setLineWidth(0.2);
+                doc.rect(mg, y0, cw, grupoH, 'D');
+                y = y0 + grupoH;
+            });
+            y += 8;
         }
 
         // ── Resumo de valores ──
