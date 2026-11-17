@@ -1100,14 +1100,21 @@ const PacotesModule = {
         try {
             const r = await SearchModule._buscarSimples({
                 origem: p.origem, destino: p.destino, dataIda: p.dataIda, dataVolta: p.dataVolta || '',
-                passageiros: { adultos: p.adultos, criancas: p.criancas, bebes: p.bebes },
+                // Consulta a tarifa por pessoa (1 adulto), igual à tela Buscar Voos: com
+                // vários passageiros o Google Flights esconde voos sem lugar para todos
+                // (ex.: REC→BSB G3 1617 sumia com 3 adultos). Os passageiros do painel
+                // entram só na quantidade do serviço (total = tarifa × passageiros).
+                passageiros: { adultos: 1, criancas: 0, bebes: 0 },
                 classe: 'economica', companhia: p.companhia,
             });
             if (this._buscaVoo !== b) return;   // painel fechado durante a busca
             // Todos os voos com preço; a ordem de exibição (preço/horário) é escolhida no painel
-            const ordenar = l => (l || []).filter(x => x.price > 0).sort((a, c) => a.price - c.price);
-            b.ida = ordenar(r.ida);
-            b.volta = p.dataVolta ? ordenar(r.volta) : [];
+            // id próprio por posição: algumas fontes (Smiles) podem repetir o id e a
+            // seleção marcaria o voo errado
+            const ordenar = (l, tipo) => (l || []).filter(x => x.price > 0).sort((a, c) => a.price - c.price)
+                .map((x, k) => ({ ...x, id: `${tipo}-${k}` }));
+            b.ida = ordenar(r.ida, 'ida');
+            b.volta = p.dataVolta ? ordenar(r.volta, 'volta') : [];
             b.selIda = b.ida[0]?.id ?? null;
             b.selVolta = b.volta[0]?.id ?? null;
             if (!b.ida.length) b.erro = 'Nenhum voo encontrado para essa busca.';
@@ -1359,6 +1366,7 @@ const PacotesModule = {
                         <button class="btn btn-sm btn-outline-secondary" type="button" onclick="PacotesModule.fecharBuscaVoos()">Cancelar</button>
                     </div>
                 </div>
+                <div class="small text-muted mt-2"><i class="bi bi-info-circle me-1"></i>Preços por pessoa (mesma busca da tela Buscar Voos). Os passageiros acima entram no total do serviço; confirme na companhia se há lugar para todos.</div>
                 ${b.erro ? `<div class="alert alert-warning py-1 px-2 small mt-2 mb-0">${esc(b.erro)}</div>` : ''}
                 ${b.ida.length ? `
                 <div class="d-flex align-items-center gap-2 mt-2 small">
