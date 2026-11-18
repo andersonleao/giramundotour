@@ -737,6 +737,11 @@ const PacotesModule = {
         // Mudou o tipo → aplica padrões de hotel e re-renderiza (mostra/oculta campos)
         if (campo === 'tipo') {
             if (valor === 'hotel') {
+                // Já há hotel incluso → este entra como opção alternativa (igual a "adicionar hotel")
+                if (s.noOrcamento === undefined
+                    && this._servicos.some(o => o !== s && o.tipo === 'hotel' && o.noOrcamento !== false)) {
+                    s.noOrcamento = false;
+                }
                 if (!s.quartos)  s.quartos  = 1;
                 if (!s.pessoas)  s.pessoas  = 2;
                 if (!s.diarias)  s.diarias  = this._calcDiarias(s.dataInicio, s.dataFim) || 1;
@@ -773,7 +778,7 @@ const PacotesModule = {
         const tipo    = this.TIPOS.find(t => t.value === s.tipo) || this.TIPOS[5];
         const ehHotel = s.tipo === 'hotel';
         const ehAereo = s.tipo === 'aereo';
-        const foraOrc = ehHotel && s.noOrcamento === false;
+        const foraOrc = s.noOrcamento === false;
         const esc     = v => this._esc(v);
         const campoMoeda = (id, campo, valor) => `
                     <div class="input-group input-group-sm">
@@ -801,15 +806,16 @@ const PacotesModule = {
                        style="min-width:200px" value="${esc(s.descricao)}"
                        placeholder="${ehHotel ? 'Nome do hotel' : 'Descrição do serviço'}"
                        oninput="PacotesModule._onServicoChange(${i},'descricao',this.value)">
-                ${ehHotel ? `
-                <div class="form-check form-switch mb-0 ms-1" title="Desmarcado: o hotel sai do total e aparece no PDF só como opção alternativa">
+                <div class="form-check form-switch mb-0 ms-1" title="${ehHotel
+                        ? 'Desmarcado: o hotel sai do total e aparece no PDF só como opção alternativa'
+                        : 'Desmarcado: o serviço sai do total e aparece no PDF como opcional'}">
                     <input class="form-check-input" type="checkbox" id="svc_orc_${i}" ${foraOrc ? '' : 'checked'}
                            onchange="PacotesModule._toggleNoOrcamento(${i}, this.checked)">
                     <label class="form-check-label small text-nowrap" for="svc_orc_${i}">Incluir no orçamento</label>
-                </div>` : ''}
+                </div>
                 <span class="badge ${foraOrc ? 'bg-secondary bg-opacity-10 text-secondary text-decoration-line-through' : 'bg-primary bg-opacity-10 text-primary'} fw-semibold"
                       id="svc_badge_${i}" title="${foraOrc ? 'Opção alternativa — não soma no total' : ''}">${this._fmtMoeda(+s.valorTotal||0)}</span>
-                ${foraOrc ? '<span class="badge bg-warning text-dark">Opção</span>' : ''}
+                ${foraOrc ? `<span class="badge bg-warning text-dark">${ehHotel ? 'Opção' : 'Opcional'}</span>` : ''}
                 <button class="btn btn-sm btn-outline-danger" title="Remover serviço"
                         onclick="PacotesModule.removerServico(${i})">
                     <i class="bi bi-trash"></i>
@@ -1053,6 +1059,7 @@ const PacotesModule = {
                 companhia: '',
             },
             ida: [], volta: [], selIda: null, selVolta: null, carregando: false, erro: '', buscou: false, ordem: 'preco',
+            filtros: { direto: false, cia: '' },
         };
         this._renderizarServicos();
         document.getElementById('bv_origem')?.focus();
@@ -1115,8 +1122,10 @@ const PacotesModule = {
                 .map((x, k) => ({ ...x, id: `${tipo}-${k}` }));
             b.ida = ordenar(r.ida, 'ida');
             b.volta = p.dataVolta ? ordenar(r.volta, 'volta') : [];
+            b.filtros = { direto: false, cia: '' };
             b.selIda = b.ida[0]?.id ?? null;
-            b.selVolta = b.volta[0]?.id ?? null;
+            // Volta: a mais barata que sai depois da chegada da ida (ida e volta no mesmo dia)
+            b.selVolta = this._melhorVolta(b);
             if (!b.ida.length) b.erro = 'Nenhum voo encontrado para essa busca.';
         } catch (e) {
             b.erro = e.message || 'Erro ao buscar voos';
@@ -1131,15 +1140,88 @@ const PacotesModule = {
         const b = this._buscaVoo;
         if (!b) return;
         this._syncServicosFromDOM();
-        this._lerParamsBusca();
         b.ordem = ordem;
-        this._renderizarServicos();
+        this._atualizarResultadosBusca();
+    },
+
+    // Margem mínima entre a chegada da ida e a partida da volta (minutos)
+    MARGEM_VOLTA_MIN: 60,
+
+    _tsVoo(v, ponta) {
+        const d = ponta === 'chegada' ? (v.arrivalDate || v.departureDate) : v.departureDate;
+        const h = ponta === 'chegada' ? v.arrivalTime : v.departureTime;
+        if (!d || !h) return NaN;
+        return new Date(`${d}T${String(h).padStart(5, '0')}:00`).getTime();
+    },
+
+    // A volta só serve se partir depois da chegada da ida + margem
+    _voltaCompativel(ida, volta) {
+        if (!ida || !volta) return true;
+        const cheg = this._tsVoo(ida, 'chegada'), part = this._tsVoo(volta, 'partida');
+        if (isNaN(cheg) || isNaN(part)) return true;
+        return part >= cheg + this.MARGEM_VOLTA_MIN * 60000;
+    },
+
+    _passaFiltros(b, v) {
+        const f = b.filtros || {};
+        if (f.direto && +v.stops > 0) return false;
+        if (f.cia && v.airline !== f.cia) return false;
+        return true;
+    },
+
+    // Volta mais barata compatível com a ida escolhida e com os filtros
+    _melhorVolta(b) {
+        if (!b.volta.length) return null;
+        const ida = b.ida.find(x => x.id === b.selIda);
+        const ok = b.volta.filter(v => this._voltaCompativel(ida, v));
+        const pref = ok.filter(v => this._passaFiltros(b, v));
+        const lista = pref.length ? pref : ok;
+        // Prefere a mesma companhia da ida quando o preço empata
+        lista.sort((a, c) => (a.price - c.price) || ((c.airline === ida?.airline) - (a.airline === ida?.airline)));
+        return lista[0]?.id ?? 'sem';
     },
 
     _selecionarVooBusca(tipo, id) {
         const b = this._buscaVoo;
         if (!b) return;
-        if (tipo === 'ida') b.selIda = id; else b.selVolta = id;
+        if (tipo === 'ida') {
+            b.selIda = id;
+            const ida = b.ida.find(x => x.id === id);
+            const volta = b.volta.find(x => x.id === b.selVolta);
+            // Volta escolhida ficou inviável (sai antes da ida chegar) → troca pela melhor opção
+            if (volta && !this._voltaCompativel(ida, volta)) {
+                b.selVolta = this._melhorVolta(b);
+                App.showToast('A volta escolhida saía antes da chegada da ida — selecionei outra opção', 'info');
+            } else if (b.selVolta === null && b.volta.length) {
+                b.selVolta = this._melhorVolta(b);
+            }
+        } else {
+            b.selVolta = id;
+        }
+        this._atualizarResultadosBusca();
+    },
+
+    filtrarBuscaVoos(campo, valor) {
+        const b = this._buscaVoo;
+        if (!b) return;
+        b.filtros = { ...(b.filtros || {}), [campo]: valor };
+        // Seleção escondida pelo filtro → passa para a mais barata visível
+        const visiveis = l => l.filter(v => this._passaFiltros(b, v));
+        const ida = b.ida.find(x => x.id === b.selIda);
+        if (!ida || !this._passaFiltros(b, ida)) b.selIda = visiveis(b.ida)[0]?.id ?? b.selIda;
+        const volta = b.volta.find(x => x.id === b.selVolta);
+        if (volta && !this._passaFiltros(b, volta)) b.selVolta = this._melhorVolta(b);
+        this._atualizarResultadosBusca();
+    },
+
+    // Re-renderiza só a área de resultados, preservando a rolagem das listas
+    _atualizarResultadosBusca() {
+        const b = this._buscaVoo;
+        const el = document.getElementById('bv_resultados');
+        if (!b || !el) { this._renderizarServicos(); return; }
+        const scrolls = [...el.querySelectorAll('[data-bv-lista]')].map(l => [l.dataset.bvLista, l.scrollTop]);
+        el.innerHTML = this._htmlResultadosBusca(b);
+        scrolls.forEach(([k, top]) => { const l = el.querySelector(`[data-bv-lista="${k}"]`); if (l) l.scrollTop = top; });
     },
 
     // Converte o voo do resultado da busca para o formato da Cotação
@@ -1155,7 +1237,11 @@ const PacotesModule = {
             duracao: +v.duration || 0,
             escalas: +v.stops || 0,
             segmentos: Array.isArray(v.segmentos)
-                ? v.segmentos.map(sg => ({ origem: sg.origem?.codigo || sg.origem || '', destino: sg.destino?.codigo || sg.destino || '' }))
+                ? v.segmentos.map(sg => ({
+                    origem: sg.origem?.codigo || sg.origem || '', destino: sg.destino?.codigo || sg.destino || '',
+                    partida: sg.partida || '', chegada: sg.chegada || '',
+                    companhia: sg.companhia || '', numeroVoo: sg.numeroVoo || '',
+                }))
                 : undefined,
             preco: +v.price || 0,
             precoTipo: v.precoTipo || null,
@@ -1170,6 +1256,10 @@ const PacotesModule = {
         const ida = b.ida.find(x => x.id === b.selIda);
         if (!s || !ida) { App.showToast('Selecione o voo de ida', 'warning'); return; }
         const volta = b.volta.find(x => x.id === b.selVolta);
+        if (volta && !this._voltaCompativel(ida, volta)) {
+            App.showToast('A volta selecionada sai antes da chegada da ida. Escolha outra volta.', 'warning');
+            return;
+        }
 
         s.voos = [this._normalizarVooBusca(ida, 'ida')];
         if (volta) s.voos.push(this._normalizarVooBusca(volta, 'volta'));
@@ -1302,31 +1392,6 @@ const PacotesModule = {
                 <input type="number" id="${id}" class="form-control form-control-sm text-center" min="${min}" value="${val}">
             </div>`;
 
-        const hhmm = v => `${v.departureDate || ''} ${String(v.departureTime || '').padStart(5, '0')}`;
-        const ordenada = l => b.ordem === 'horario'
-            ? [...l].sort((a, c) => hhmm(a).localeCompare(hhmm(c)) || a.price - c.price)
-            : l;
-        const listaVoos = (tipo, lista0, sel) => {
-            if (!lista0.length) return '';
-            const lista = ordenada(lista0);
-            return `
-                <div class="col-lg-6">
-                    <div class="small fw-semibold mb-1">${tipo === 'ida' ? 'Ida' : 'Volta'} — ${lista.length} ${lista.length === 1 ? 'opção' : 'opções'} (${b.ordem === 'horario' ? 'por horário de partida' : 'menor preço primeiro'})</div>
-                    <div class="list-group" style="max-height:380px;overflow:auto">
-                        ${lista.map(v => `
-                        <label class="list-group-item list-group-item-action d-flex align-items-center gap-2 py-1 small">
-                            <input class="form-check-input mt-0" type="radio" name="bv_sel_${tipo}" ${v.id === sel ? 'checked' : ''}
-                                   onchange="PacotesModule._selecionarVooBusca('${tipo}', ${JSON.stringify(v.id).replace(/"/g, '&quot;')})">
-                            <span class="fw-semibold text-nowrap" style="min-width:90px">${esc(v.airlineName)} ${esc(v.flightNumber)}</span>
-                            <span class="text-nowrap">${esc(v.departureTime)} → ${esc(v.arrivalTime)}</span>
-                            <span class="text-muted text-nowrap">${this._fmtDuracao(v.duration)}</span>
-                            <span class="text-muted text-nowrap">${+v.stops ? v.stops + (+v.stops === 1 ? ' escala' : ' escalas') : 'Direto'}</span>
-                            <span class="ms-auto fw-bold text-primary text-nowrap">${this._fmtMoeda(v.price)}${v.precoTipo === 'estimado' ? ' <span class="badge bg-warning text-dark">estimado</span>' : ''}</span>
-                        </label>`).join('')}
-                    </div>
-                </div>`;
-        };
-
         return `
             <div class="bg-white border rounded p-2 mt-1">
                 <datalist id="bv_aeroportos">${opcoesAero}</datalist>
@@ -1368,27 +1433,121 @@ const PacotesModule = {
                 </div>
                 <div class="small text-muted mt-2"><i class="bi bi-info-circle me-1"></i>Preços por pessoa (mesma busca da tela Buscar Voos). Os passageiros acima entram no total do serviço; confirme na companhia se há lugar para todos.</div>
                 ${b.erro ? `<div class="alert alert-warning py-1 px-2 small mt-2 mb-0">${esc(b.erro)}</div>` : ''}
-                ${b.ida.length ? `
-                <div class="d-flex align-items-center gap-2 mt-2 small">
-                    <span class="text-muted">Ordenar por:</span>
+                <div id="bv_resultados">${this._htmlResultadosBusca(b)}</div>
+            </div>`;
+    },
+
+    _htmlResultadosBusca(b) {
+        if (!b.ida.length) return '';
+        const esc = v => this._esc(v);
+        const idaSel = b.ida.find(x => x.id === b.selIda);
+        const voltaSel = b.volta.find(x => x.id === b.selVolta);
+        const f = b.filtros || {};
+        const attr = v => JSON.stringify(v).replace(/"/g, '&quot;');
+
+        const hhmm = v => `${v.departureDate || ''} ${String(v.departureTime || '').padStart(5, '0')}`;
+        const ordenada = l => b.ordem === 'horario'
+            ? [...l].sort((a, c) => hhmm(a).localeCompare(hhmm(c)) || a.price - c.price)
+            : l;
+        const diasDepois = v => (v.arrivalDate && v.departureDate && v.arrivalDate > v.departureDate)
+            ? Math.round((new Date(v.arrivalDate) - new Date(v.departureDate)) / 864e5) : 0;
+        // Aeroportos de conexão (ex.: "via GRU")
+        const via = v => {
+            const segs = Array.isArray(v.segmentos) ? v.segmentos : [];
+            const aero = segs.slice(0, -1).map(sg => sg.destino?.codigo || sg.destino).filter(Boolean);
+            return aero.length ? ` via ${aero.join(', ')}` : '';
+        };
+        const escTxt = v => +v.stops ? `${v.stops} ${+v.stops === 1 ? 'escala' : 'escalas'}${via(v)}` : 'Direto';
+
+        const item = (tipo, v, sel) => {
+            const incompat = tipo === 'volta' && !this._voltaCompativel(idaSel, v);
+            const ativo = v.id === sel;
+            const d = diasDepois(v);
+            return `
+                <label class="list-group-item d-flex align-items-center gap-2 py-1 small ${ativo ? 'bg-primary bg-opacity-10 border-primary' : 'list-group-item-action'} ${incompat ? 'opacity-50' : ''}"
+                       style="${ativo ? 'border-left:4px solid var(--bs-primary)' : ''}" ${incompat ? 'title="Sai antes da chegada do voo de ida"' : ''}>
+                    <input class="form-check-input mt-0" type="radio" name="bv_sel_${tipo}" ${ativo ? 'checked' : ''} ${incompat ? 'disabled' : ''}
+                           onchange="PacotesModule._selecionarVooBusca('${tipo}', ${attr(v.id)})">
+                    <span class="fw-semibold text-nowrap" style="min-width:90px">${esc(v.airlineName)} ${esc(v.flightNumber)}</span>
+                    <span class="text-nowrap">${esc(v.departureTime)} → ${esc(v.arrivalTime)}${d ? ` <sup class="text-danger fw-bold">+${d}</sup>` : ''}</span>
+                    <span class="text-muted text-nowrap">${this._fmtDuracao(v.duration)}</span>
+                    <span class="text-muted">${esc(escTxt(v))}</span>
+                    ${incompat ? '<span class="badge bg-secondary">antes da chegada da ida</span>' : ''}
+                    <span class="ms-auto fw-bold text-primary text-nowrap">${this._fmtMoeda(v.price)}${v.precoTipo === 'estimado' ? ' <span class="badge bg-warning text-dark">estimado</span>' : ''}</span>
+                </label>`;
+        };
+
+        const listaVoos = (tipo, lista0, sel) => {
+            if (!lista0.length) return '';
+            const lista = ordenada(lista0.filter(v => this._passaFiltros(b, v)));
+            const semVolta = tipo === 'volta' ? `
+                <label class="list-group-item d-flex align-items-center gap-2 py-1 small ${sel === 'sem' ? 'bg-primary bg-opacity-10' : 'list-group-item-action'} text-muted">
+                    <input class="form-check-input mt-0" type="radio" name="bv_sel_volta" ${sel === 'sem' ? 'checked' : ''}
+                           onchange="PacotesModule._selecionarVooBusca('volta', 'sem')">
+                    <span class="fst-italic">Sem volta (somente ida)</span>
+                </label>` : '';
+            return `
+                <div class="col-lg-6">
+                    <div class="small fw-semibold mb-1 ${tipo === 'volta' ? 'text-success' : 'text-primary'}">
+                        <i class="bi bi-airplane${tipo === 'volta' ? '-fill' : ''} me-1"></i>${tipo === 'ida' ? 'Ida' : 'Volta'}
+                        <span class="text-muted fw-normal">— ${lista.length} de ${lista0.length} ${lista0.length === 1 ? 'opção' : 'opções'}</span>
+                    </div>
+                    <div class="list-group" data-bv-lista="${tipo}" style="max-height:380px;overflow:auto">
+                        ${semVolta}
+                        ${lista.map(v => item(tipo, v, sel)).join('') || '<div class="list-group-item small text-muted">Nenhum voo com esses filtros.</div>'}
+                    </div>
+                </div>`;
+        };
+
+        // Filtro de companhia só com as cias que vieram no resultado
+        const cias = [...new Map([...b.ida, ...b.volta].map(v => [v.airline, v.airlineName || v.airline])).entries()]
+            .filter(([c]) => c);
+
+        const pax = (b.params.adultos || 1) + (b.params.criancas || 0) + (b.params.bebes || 0);
+        const porPessoa = (+idaSel?.price || 0) + (+voltaSel?.price || 0);
+        const linhaResumo = (rot, v, cor) => v ? `
+            <div><span class="fw-semibold ${cor}">${rot}:</span> ${esc(v.airlineName)} ${esc(v.flightNumber)} ·
+                ${v.departureDate ? this._fmtData(v.departureDate) : ''} ${esc(v.departureTime)} → ${esc(v.arrivalTime)} · ${esc(escTxt(v))}
+                · <span class="fw-semibold">${this._fmtMoeda(v.price)}</span></div>` : '';
+
+        return `
+                <div class="d-flex align-items-center gap-3 mt-2 small flex-wrap">
+                    <span class="text-muted">Ordenar:</span>
                     <div class="btn-group btn-group-sm">
                         <button type="button" class="btn ${b.ordem !== 'horario' ? 'btn-primary' : 'btn-outline-primary'}"
                                 onclick="PacotesModule.ordenarBuscaVoos('preco')"><i class="bi bi-currency-dollar me-1"></i>Preço</button>
                         <button type="button" class="btn ${b.ordem === 'horario' ? 'btn-primary' : 'btn-outline-primary'}"
                                 onclick="PacotesModule.ordenarBuscaVoos('horario')"><i class="bi bi-clock me-1"></i>Horário</button>
                     </div>
+                    <div class="form-check form-switch mb-0">
+                        <input class="form-check-input" type="checkbox" id="bv_f_direto" ${f.direto ? 'checked' : ''}
+                               onchange="PacotesModule.filtrarBuscaVoos('direto', this.checked)">
+                        <label class="form-check-label" for="bv_f_direto">Só voos diretos</label>
+                    </div>
+                    ${cias.length > 1 ? `
+                    <select class="form-select form-select-sm w-auto" onchange="PacotesModule.filtrarBuscaVoos('cia', this.value)">
+                        <option value="">Todas as companhias</option>
+                        ${cias.map(([c, n]) => `<option value="${esc(c)}" ${f.cia === c ? 'selected' : ''}>${esc(n)}</option>`).join('')}
+                    </select>` : ''}
                 </div>
                 <div class="row g-2 mt-1">
                     ${listaVoos('ida', b.ida, b.selIda)}
                     ${listaVoos('volta', b.volta, b.selVolta)}
                 </div>
                 ${b.params.dataVolta && b.buscou && !b.volta.length ? '<div class="small text-muted mt-1">Nenhum voo de volta encontrado — será usado somente a ida.</div>' : ''}
-                <div class="d-flex justify-content-end mt-2">
-                    <button class="btn btn-sm btn-success" type="button" onclick="PacotesModule.aplicarVoosBusca()">
+                <div class="border rounded p-2 mt-2 bg-light small d-flex flex-wrap align-items-center gap-2">
+                    <div class="flex-grow-1">
+                        ${linhaResumo('Ida', idaSel, 'text-primary') || '<span class="text-muted">Selecione o voo de ida</span>'}
+                        ${linhaResumo('Volta', voltaSel, 'text-success') || (b.volta.length ? '<div class="text-muted fst-italic">Sem volta (somente ida)</div>' : '')}
+                    </div>
+                    <div class="text-end">
+                        <div class="text-muted">${this._fmtMoeda(porPessoa)} por pessoa × ${pax} ${pax === 1 ? 'passageiro' : 'passageiros'}</div>
+                        <div class="fw-bold text-primary fs-6">${this._fmtMoeda(porPessoa * pax)} <span class="small fw-normal text-muted">(sem taxas)</span></div>
+                    </div>
+                    <button class="btn btn-sm btn-success" type="button" ${idaSel ? '' : 'disabled'} onclick="PacotesModule.aplicarVoosBusca()">
                         <i class="bi bi-check2-circle me-1"></i>Usar voos selecionados
                     </button>
-                </div>` : ''}
-            </div>`;
+                </div>`;
     },
 
     _toggleNoOrcamento(idx, incluir) {
@@ -1554,10 +1713,11 @@ const PacotesModule = {
 
     // ── Cálculos ─────────────────────────────────────────────────────
 
-    // Serviços que entram no total. Hotel com noOrcamento === false é só uma opção
-    // alternativa (pacotes antigos não têm o campo → contam como incluídos).
+    // Serviços que entram no total. Qualquer serviço com noOrcamento === false é
+    // opcional: hotel vira opção alternativa de hospedagem; os demais aparecem no PDF
+    // como "Serviços opcionais". Pacotes antigos não têm o campo → contam como incluídos.
     _servicosNoOrcamento(servicos) {
-        return servicos.filter(s => s.tipo !== 'hotel' || s.noOrcamento !== false);
+        return servicos.filter(s => s.noOrcamento !== false);
     },
 
     _calcSubtotal() {
@@ -2055,7 +2215,8 @@ const PacotesModule = {
         });
         const restoIncl = Math.max(0, roteiro.length - MAX_INCL);
         const opcoesExtra = temOpcoes ? hoteis.filter(h => !noOrcamento.includes(h)).length : 0;
-        const linhasIncl = Math.max(1, itensIncl.length) + (restoIncl ? 1 : 0) + (opcoesExtra ? 1 : 0);
+        const opcionaisExtra = servicos.filter(s => s.tipo !== 'hotel' && !noOrcamento.includes(s)).length;
+        const linhasIncl = Math.max(1, itensIncl.length) + (restoIncl ? 1 : 0) + (opcoesExtra ? 1 : 0) + (opcionaisExtra ? 1 : 0);
         const blocoH = Math.max(46, 13 + linhasIncl * 5.6 + 3);
         _checkPage(blocoH);
 
@@ -2079,7 +2240,8 @@ const PacotesModule = {
             iy += 5.6;
         });
         if (restoIncl) { txt(`+ ${plural(restoIncl, 'serviço')} ${this.MOSTRAR_ROTEIRO ? 'no roteiro abaixo' : 'no resumo de valores'}`, mg + 11, iy, { size: 8, italic: true, cor: CINZA }); iy += 5.6; }
-        if (opcoesExtra) txt(`+ ${opcoesExtra === 1 ? '1 outra opção' : opcoesExtra + ' outras opções'} de hospedagem no final`, mg + 11, iy, { size: 8, italic: true, cor: CINZA });
+        if (opcoesExtra) { txt(`+ ${opcoesExtra === 1 ? '1 outra opção' : opcoesExtra + ' outras opções'} de hospedagem no final`, mg + 11, iy, { size: 8, italic: true, cor: CINZA }); iy += 5.6; }
+        if (opcionaisExtra) txt(`+ ${plural(opcionaisExtra, 'serviço opcional', 'serviços opcionais')} (não incluso${opcionaisExtra > 1 ? 's' : ''} no valor)`, mg + 11, iy, { size: 8, italic: true, cor: CINZA });
 
         const px = mg + inclW + gapCol;
         doc.setFillColor(...NAVY);
@@ -2622,6 +2784,41 @@ const PacotesModule = {
                 cardServico(h, y0, true, ex);
                 y = y0 + hh + 6;
                 desenharDocs(h);
+            });
+            y += 4;
+        }
+
+        // ── Serviços opcionais: desmarcados em "Incluir no orçamento" (exceto hotéis,
+        // que já saem em "Opções de hospedagem"). Não somam no total do pacote. ──
+        const opcionais = servicos.filter(s => s.tipo !== 'hotel' && !noOrcamento.includes(s));
+        if (opcionais.length) {
+            const extraOpc = s => ({
+                rodape: +s.valorTotal > 0 ? {
+                    rot: 'Valor adicional, se contratado',
+                    val: this._fmtMoeda(+s.valorTotal * (1 + markup / 100)),
+                    sub: '',
+                } : undefined,
+            });
+            secao('Serviços opcionais', plural(opcionais.length, 'serviço', 'serviços'),
+                cardServico(opcionais[0], 0, false, extraOpc(opcionais[0])) + docJunto(opcionais[0]) + 6);
+            txt('Não incluídos no total do pacote. Podem ser contratados à parte.',
+                mg, y - 2, { size: 8, italic: true, cor: CINZA });
+            y += 3;
+            opcionais.forEach(s => {
+                const ex = extraOpc(s);
+                const hh = cardServico(s, y, false, ex);
+                _checkPage(hh + docJunto(s));
+                const y0 = y;
+                doc.setFillColor(...FUNDO);
+                doc.roundedRect(cardX + 0.5, y0 + 0.7, cardW, hh, 2.5, 2.5, 'F');
+                doc.setFillColor(255, 255, 255);
+                doc.setDrawColor(...LINHA); doc.setLineWidth(0.25);
+                doc.roundedRect(cardX, y0, cardW, hh, 2.5, 2.5, 'FD');
+                doc.setFillColor(...rgb(tipoInfo(s.tipo).cor));
+                doc.roundedRect(cardX, y0, 1.4, hh, 0.7, 0.7, 'F');
+                cardServico(s, y0, true, ex);
+                y = y0 + hh + 6;
+                desenharDocs(s);
             });
             y += 4;
         }
