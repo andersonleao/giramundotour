@@ -836,8 +836,8 @@ const PacotesModule = {
                            onchange="PacotesModule._onServicoChange(${i},'dataInicio',this.value)">
                 </div>
                 <div class="col-md-2 col-6">
-                    <label class="form-label small text-muted mb-1">${ehHotel ? 'Check-out' : 'Fim'}</label>
-                    <input type="date" id="svc_dtF_${i}" class="form-control form-control-sm" data-apos="svc_dtI_${i}" value="${esc(s.dataFim).slice(0,10)}"
+                    <label class="form-label small text-muted mb-1">${ehHotel ? 'Check-out' : 'Fim'}${ehHotel ? '' : ' <span class="fw-normal">(opcional)</span>'}</label>
+                    <input type="date" id="svc_dtF_${i}" class="form-control form-control-sm" data-apos="svc_dtI_${i}" ${ehHotel ? '' : 'data-opcional'} value="${esc(s.dataFim).slice(0,10)}"
                            onchange="PacotesModule._onServicoChange(${i},'dataFim',this.value)">
                 </div>
                 <div class="col-md-2 col-6">
@@ -1243,8 +1243,6 @@ const PacotesModule = {
                     companhia: sg.companhia || '', numeroVoo: sg.numeroVoo || '',
                 }))
                 : undefined,
-            preco: +v.price || 0,
-            precoTipo: v.precoTipo || null,
         };
     },
 
@@ -1269,19 +1267,18 @@ const PacotesModule = {
         const rota = `${ida.origin} – ${ida.destination}`;
         s.descricao = `${rota}${volta ? ' (ida e volta)' : ' (somente ida)'}${cias ? ' — ' + cias : ''}`;
         if (!s.fornecedor) s.fornecedor = cias;
+        // Importa só os dados do voo: tarifa, taxas e total continuam os digitados no serviço.
+        // Fim só é preenchido quando há volta (é opcional no aéreo).
         s.dataInicio = (ida.departureDate || '').slice(0, 10);
-        s.dataFim = volta ? (volta.arrivalDate || volta.departureDate || '').slice(0, 10) : (ida.arrivalDate || ida.departureDate || '').slice(0, 10);
+        s.dataFim = volta ? (volta.departureDate || '').slice(0, 10) : '';
+        // Passageiros é dado da viagem; o total acompanha a tarifa já informada (se houver)
         s.quantidade = (p.adultos || 1) + (p.criancas || 0) + (p.bebes || 0);
-        s.valorUnit = Math.round(((+ida.price || 0) + (+volta?.price || 0)) * 100) / 100;
-        s.valorTotal = s.quantidade * (s.valorUnit + this._taxasAereo(s));
+        if (+s.valorUnit) s.valorTotal = s.quantidade * ((+s.valorUnit || 0) + this._taxasAereo(s));
 
         this._buscaVoo = null;
         this._renderizarServicos();
         this._recalcular();
-        const estimado = [ida, volta].some(x => x && x.precoTipo === 'estimado');
-        App.showToast(estimado
-            ? 'Voos adicionados. Atenção: preço estimado — confira a tarifa antes de enviar.'
-            : 'Voos adicionados ao serviço aéreo', estimado ? 'warning' : 'success');
+        App.showToast('Voos adicionados à grade. Informe a tarifa no serviço.', 'success');
     },
 
     removerVoosServico(idx) {
@@ -1431,7 +1428,7 @@ const PacotesModule = {
                         <button class="btn btn-sm btn-outline-secondary" type="button" onclick="PacotesModule.fecharBuscaVoos()">Cancelar</button>
                     </div>
                 </div>
-                <div class="small text-muted mt-2"><i class="bi bi-info-circle me-1"></i>Preços por pessoa (mesma busca da tela Buscar Voos). Os passageiros acima entram no total do serviço; confirme na companhia se há lugar para todos.</div>
+                <div class="small text-muted mt-2"><i class="bi bi-info-circle me-1"></i>Preços por pessoa, só para referência (mesma busca da tela Buscar Voos). Ao usar os voos, entram na grade apenas os dados do voo; a tarifa você informa no serviço.</div>
                 ${b.erro ? `<div class="alert alert-warning py-1 px-2 small mt-2 mb-0">${esc(b.erro)}</div>` : ''}
                 <div id="bv_resultados">${this._htmlResultadosBusca(b)}</div>
             </div>`;
@@ -1542,10 +1539,10 @@ const PacotesModule = {
                     </div>
                     <div class="text-end">
                         <div class="text-muted">${this._fmtMoeda(porPessoa)} por pessoa × ${pax} ${pax === 1 ? 'passageiro' : 'passageiros'}</div>
-                        <div class="fw-bold text-primary fs-6">${this._fmtMoeda(porPessoa * pax)} <span class="small fw-normal text-muted">(sem taxas)</span></div>
+                        <div class="fw-bold text-primary fs-6">${this._fmtMoeda(porPessoa * pax)} <span class="small fw-normal text-muted">(referência, sem taxas)</span></div>
                     </div>
                     <button class="btn btn-sm btn-success" type="button" ${idaSel ? '' : 'disabled'} onclick="PacotesModule.aplicarVoosBusca()">
-                        <i class="bi bi-check2-circle me-1"></i>Usar voos selecionados
+                        <i class="bi bi-check2-circle me-1"></i>Usar voos na grade
                     </button>
                 </div>`;
     },

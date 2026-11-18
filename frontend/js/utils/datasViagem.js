@@ -62,7 +62,8 @@ const DatasViagem = {
         });
 
         // Abre o calendário da volta (só a visível e ainda vazia)
-        const prox = voltas.find(v => !v.value && !v.disabled && v.offsetParent !== null);
+        // data-opcional: fim opcional (ex.: aéreo só de ida) — não abre o calendário sozinho
+        const prox = voltas.find(v => !v.value && !v.disabled && !('opcional' in v.dataset) && v.offsetParent !== null);
         if (prox) {
             prox.min = this._minDe(prox);
             try { prox.showPicker(); } catch (_) { prox.focus(); }
