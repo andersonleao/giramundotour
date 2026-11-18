@@ -184,7 +184,11 @@ class SerpApiFlightsService {
             currency: 'BRL',
             hl: 'pt',
             gl: 'br',
-            travel_class: String(this._mapClasse(params.classe))
+            travel_class: String(this._mapClasse(params.classe)),
+            // Sem isto o Google devolve só a seleção "melhores voos" (ex.: JPA→BSB
+            // LATAM vinha com 3 opções, contra 7 horários de saída disponíveis).
+            // Os itinerários ruins que vêm junto são filtrados em _converterItinerarios.
+            show_hidden: 'true'
         };
 
         if ((params.criancas || 0) > 0) queryParams.children = String(params.criancas);
@@ -215,10 +219,23 @@ class SerpApiFlightsService {
 
         const totalPax = Math.max(1, (params.adultos || 1) + (params.criancas || 0));
         const classeStr = params.classe || 'economica';
-        const itinerarios = [
+        const todos = [
             ...(response.best_flights || []),
             ...(response.other_flights || [])
-        ];
+        ].filter(it => Array.isArray(it.flights) && it.flights.length > 0 && it.price);
+
+        // show_hidden traz também conexões impraticáveis: descarta troca de aeroporto
+        // na conexão (ex.: chega em GRU e sai de CGH) e itinerários com 2+ escalas
+        // muito mais longos que o voo mais rápido da rota.
+        const semTroca = todos.filter(it => it.flights.every((f, i) =>
+            i === 0 || it.flights[i - 1].arrival_airport?.id === f.departure_airport?.id));
+        const duracoes = semTroca.map(it => it.total_duration || 0).filter(d => d > 0);
+        const menorDur = duracoes.length ? Math.min(...duracoes) : 0;
+        const limiteDur = menorDur ? Math.max(menorDur * 2.5, menorDur + 360) : Infinity;
+        const itinerarios = semTroca
+            .filter(it => it.flights.length <= 2 || (it.total_duration || 0) <= limiteDur)
+            // Mais barato primeiro: na deduplicação por voo de saída fica a melhor tarifa
+            .sort((a, b) => (a.price - b.price) || (a.flights.length - b.flights.length));
 
         const voos = [];
         const seen = new Set();
