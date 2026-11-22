@@ -9,6 +9,7 @@ const UsuariosModule = {
     MENU_LABELS: {
         busca:         { label: 'Buscar Voos',    icon: 'bi-search' },
         cotacao:       { label: 'Cotação',        icon: 'bi-file-earmark-text' },
+        orcamentos:    { label: 'Orçamentos',     icon: 'bi-file-earmark-richtext' },
         bilhetes:      { label: 'Bilhetes',       icon: 'bi-ticket-perforated' },
         hoteis:        { label: 'Hotéis',         icon: 'bi-hotel' },
         monitoramento: { label: 'Monitoramento',  icon: 'bi-graph-down-arrow' },

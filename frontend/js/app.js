@@ -164,6 +164,10 @@ const App = {
                 PacotesModule.render();
                 break;
 
+            case 'orcamentos':
+                OrcamentosModule.render();
+                break;
+
             case 'carimbo':
                 CarimboModule.render();
                 break;
@@ -219,7 +223,7 @@ const App = {
      * Retorna a primeira página que o usuário pode acessar
      */
     getFirstAllowedPage() {
-        const ordem = ['busca', 'cotacao', 'pacotes', 'documentos', 'bilhetes', 'faturas', 'hoteis', 'monitoramento', 'clientes', 'fornecedores', 'usuarios'];
+        const ordem = ['busca', 'cotacao', 'orcamentos', 'pacotes', 'documentos', 'bilhetes', 'faturas', 'hoteis', 'monitoramento', 'clientes', 'fornecedores', 'usuarios'];
         for (const p of ordem) {
             if (this.hasAccess(p)) return p;
         }
